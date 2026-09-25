@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.dockerignore
+
+# Environment
+.env.local
+.env.*.local
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Large binary / generated data files — never commit these
+data/dem/*.tif
+data/landcover/*.tif
+data/osm/*.pkl
+data/swmm/*.inp
+data/swmm/*.pkl
+data/snapshots/
+docker/WhiteboxTools_linux_amd64.zip
+
+# SWMM output
+*.rpt
+*.out
