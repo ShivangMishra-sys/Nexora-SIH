@@ -9,22 +9,11 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.routing.safe_router import SafeRouter
+from app.routing.safe_router import compute_safe_route, nearest_node
 from app.simulation.simulation_engine import engine
 
 logger = logging.getLogger("urbanflow.api.route")
 router = APIRouter(prefix="/api/route", tags=["routing"])
-
-# Router instance (initialized after graph is ready)
-_router_instance: SafeRouter | None = None
-
-
-def get_router() -> SafeRouter:
-    global _router_instance
-    if _router_instance is None or engine.graph is not None:
-        _router_instance = SafeRouter(engine.graph)
-    return _router_instance
-
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -35,6 +24,7 @@ class RouteRequest(BaseModel):
                                 description="[latitude, longitude] of start point")
     end:   List[float] = Field(..., min_length=2, max_length=2,
                                 description="[latitude, longitude] of end point")
+
 
 
 # ---------------------------------------------------------------------------
@@ -76,15 +66,29 @@ async def compute_safe_route(req: RouteRequest) -> Dict[str, Any]:
                 detail=f"Longitude {lon} is outside study area {min_lon}–{max_lon}"
             )
 
-    safe_router = get_router()
-    flood_state = engine.get_latest_state()
 
     try:
-        result = safe_router.route(
-            start_lat, start_lon,
-            end_lat, end_lon,
-            flood_state,
+        # Snap to nearest graph nodes
+        start_node = nearest_node(engine.graph, start_lat, start_lon)
+        end_node = nearest_node(engine.graph, end_lat, end_lon)
+        
+        if not start_node or not end_node:
+            raise HTTPException(status_code=400, detail="Could not snap coordinates to road network.")
+
+        depth_cm_at_node = engine.get_latest_state().get("depth_cm_at_node", {})
+        result = compute_safe_route(
+            engine.graph,
+            depth_cm_at_node,
+            start_node,
+            end_node,
+            req.vehicle_class if hasattr(req, 'vehicle_class') else "car"
         )
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="No route found.")
+            
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Route computation failed: {e}")
         raise HTTPException(
@@ -92,4 +96,4 @@ async def compute_safe_route(req: RouteRequest) -> Dict[str, Any]:
             detail=f"Route computation failed: {str(e)}"
         )
 
-    return result.to_dict()
+    return result

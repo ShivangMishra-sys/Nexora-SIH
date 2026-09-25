@@ -13,10 +13,13 @@ BBOX_WGS84 = (80.18, 13.07, 80.24, 13.13)   # ~6x6 km, historically flood-prone
 BBOX_PLACE = "Anna Nagar, Chennai, India"
 WORKING_CRS = "EPSG:32643"                    # [56] UTM 43N — single working CRS
 
+import os
+
 # ---------------------------------------------------------------------------
 # File paths
 # ---------------------------------------------------------------------------
-DATA_DIR      = Path("/data")
+BASE_DIR      = Path(__file__).resolve().parent.parent
+DATA_DIR      = Path(os.environ.get("DATA_DIR", BASE_DIR.parent / "data"))
 DEM_RAW       = DATA_DIR / "dem" / "raw_dem.tif"
 DEM_BREACHED  = DATA_DIR / "dem" / "breached.tif"
 DEM_SLOPE_X   = DATA_DIR / "dem" / "slope_x.tif"

@@ -31,7 +31,7 @@ export const api = {
     start: [number, number],
     end:   [number, number],
     vehicle_class = 'car',
-  ) => fetchJSON<RouteResult>('/api/v1/route', {
+  ) => fetchJSON<RouteResult>('/api/route/safe', {
     method: 'POST',
     body: JSON.stringify({ start, end, vehicle_class }),
   }),
@@ -126,7 +126,7 @@ export interface GeoJSONCollection {
 
 export interface GeoJSONFeature {
   type: 'Feature';
-  geometry: { type: string; coordinates: number[] | number[][] };
+  geometry: { type: 'Point' | 'LineString'; coordinates: number[] | number[][] };
   properties: Record<string, unknown>;
 }
 
