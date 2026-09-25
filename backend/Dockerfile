@@ -20,6 +20,7 @@ ENV C_INCLUDE_PATH=/usr/include/gdal
 COPY docker/WhiteboxTools_linux_amd64.zip /tmp/wbt.zip
 RUN if [ -f /tmp/wbt.zip ]; then \
       unzip /tmp/wbt.zip -d /opt/whitebox && \
+      if [ -d /opt/whitebox/WhiteboxTools_linux_amd64/WBT ]; then mv /opt/whitebox/WhiteboxTools_linux_amd64/WBT /opt/whitebox/WBT; fi && \
       chmod +x /opt/whitebox/WBT/whitebox_tools && \
       echo "WhiteboxTools installed"; \
     else \
@@ -31,8 +32,8 @@ ENV WBT_PATH=/opt/whitebox/WBT
 
 # Python deps
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir GDAL==$(gdal-config --version | awk -F'[.]' '{print $1"."$2}') && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel "numpy<2.0.0" && \
+    pip install --no-cache-dir --no-build-isolation GDAL==$(gdal-config --version) && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
