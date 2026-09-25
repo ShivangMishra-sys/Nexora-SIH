@@ -12,8 +12,8 @@ interface RouteResultCardProps {
 
 export default function RouteResultCard({ result, onClear }: RouteResultCardProps) {
   const { comparison, safe_route, naive_route } = result;
-  const timeSavedPositive = comparison.time_saved_s > 0;
-  const anyFlooded = comparison.flooded_edges_avoided > 0;
+  const distanceSavedPositive = comparison.distance_saved_m > 0;
+  const anyFlooded = comparison.max_depth_avoided_cm > 0;
 
   return (
     <div className="w-80 bg-surface-card/95 backdrop-blur-sm rounded-xl border border-surface-border shadow-2xl animate-slide-up">
@@ -43,9 +43,9 @@ export default function RouteResultCard({ result, onClear }: RouteResultCardProp
           <div className="flex gap-4">
             <div>
               <div className="text-lg font-mono font-bold text-white">
-                {formatDuration(safe_route.travel_time_s)}
+                {safe_route.max_depth_cm.toFixed(1)} cm
               </div>
-              <div className="text-[10px] text-muted">travel time</div>
+              <div className="text-[10px] text-muted">max depth</div>
             </div>
             <div>
               <div className="text-lg font-mono font-bold text-white">
@@ -65,9 +65,9 @@ export default function RouteResultCard({ result, onClear }: RouteResultCardProp
           <div className="flex gap-4">
             <div>
               <div className="text-lg font-mono font-bold text-muted">
-                {formatDuration(naive_route.travel_time_s)}
+                {naive_route.max_depth_cm.toFixed(1)} cm
               </div>
-              <div className="text-[10px] text-muted">travel time</div>
+              <div className="text-[10px] text-muted">max depth</div>
             </div>
             <div>
               <div className="text-lg font-mono font-bold text-muted">
@@ -80,14 +80,12 @@ export default function RouteResultCard({ result, onClear }: RouteResultCardProp
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-2">
-          <div className={`flex flex-col items-center p-2 rounded-lg border ${
-            timeSavedPositive ? 'bg-green-500/10 border-green-500/20' : 'bg-surface-elevated border-surface-border'
-          }`}>
-            <Clock className={`w-3.5 h-3.5 mb-1 ${timeSavedPositive ? 'text-green-400' : 'text-muted'}`} />
-            <span className={`text-sm font-mono font-bold ${timeSavedPositive ? 'text-green-400' : 'text-white'}`}>
-              {timeSavedPositive ? `-${formatDuration(comparison.time_saved_s)}` : '—'}
+          <div className={`flex flex-col items-center p-2 rounded-lg border bg-surface-elevated border-surface-border`}>
+            <Clock className={`w-3.5 h-3.5 mb-1 ${!distanceSavedPositive ? 'text-red-400' : 'text-muted'}`} />
+            <span className={`text-sm font-mono font-bold ${!distanceSavedPositive ? 'text-red-400' : 'text-white'}`}>
+              {distanceSavedPositive ? `-${formatDistance(comparison.distance_saved_m)}` : `+${formatDistance(Math.abs(comparison.distance_saved_m))}`}
             </span>
-            <span className="text-[9px] text-muted text-center">time saved</span>
+            <span className="text-[9px] text-muted text-center">detour distance</span>
           </div>
 
           <div className={`flex flex-col items-center p-2 rounded-lg border ${
@@ -95,17 +93,17 @@ export default function RouteResultCard({ result, onClear }: RouteResultCardProp
           }`}>
             <AlertTriangle className={`w-3.5 h-3.5 mb-1 ${anyFlooded ? 'text-red-400' : 'text-muted'}`} />
             <span className={`text-sm font-mono font-bold ${anyFlooded ? 'text-red-400' : 'text-white'}`}>
-              {comparison.flooded_edges_avoided}
+              {comparison.max_depth_avoided_cm.toFixed(1)} cm
             </span>
-            <span className="text-[9px] text-muted text-center">floods avoided</span>
+            <span className="text-[9px] text-muted text-center">depth avoided</span>
           </div>
 
           <div className="flex flex-col items-center p-2 rounded-lg border bg-surface-elevated border-surface-border">
             <TrendingDown className="w-3.5 h-3.5 mb-1 text-orange-400" />
             <span className="text-sm font-mono font-bold text-white">
-              {comparison.severe_edges_avoided}
+              {comparison.safe_weight_ratio.toFixed(2)}x
             </span>
-            <span className="text-[9px] text-muted text-center">severe zones</span>
+            <span className="text-[9px] text-muted text-center">safety ratio</span>
           </div>
         </div>
 
@@ -113,7 +111,7 @@ export default function RouteResultCard({ result, onClear }: RouteResultCardProp
           <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
             <Shield className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
             <p className="text-xs text-amber-300">
-              Safe route avoids {comparison.severe_edges_avoided} severe and {comparison.disruptive_edges_avoided} disruptive flood zones.
+              Safe route avoids deep waters (up to {comparison.max_depth_avoided_cm.toFixed(1)} cm avoided).
             </p>
           </div>
         )}

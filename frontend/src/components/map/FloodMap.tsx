@@ -28,8 +28,8 @@ const DEPTH_WIDTH_EXPR = [
 
 interface FloodMapProps {
   networkGeoJSON: GeoJSONCollection | null;
-  floodNodes: FloodNodePoint[];
-  routeResult: RouteResult | null;
+  floodState?: any;
+  routeResult: any;
   routeState: RouteSelectionState;
   onMapClick: (lat: number, lon: number) => void;
   onNodeHover: (nodeId: string | null) => void;
@@ -40,11 +40,11 @@ export type RouteSelectionState =
   | { step: 'selecting_start' }
   | { step: 'selecting_end'; start: { lat: number; lon: number } }
   | { step: 'computing'; start: { lat: number; lon: number }; end: { lat: number; lon: number } }
-  | { step: 'done'; start: { lat: number; lon: number }; end: { lat: number; lon: number }; result: RouteResult };
+  | { step: 'done'; start: { lat: number; lon: number }; end: { lat: number; lon: number }; result: any };
 
 export default function FloodMap({
   networkGeoJSON,
-  floodNodes,
+  floodState,
   routeResult,
   routeState,
   onMapClick,

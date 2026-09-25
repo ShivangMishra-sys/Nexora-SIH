@@ -87,6 +87,7 @@ export default function DashboardPage() {
     };
     connect();
     return () => wsRef.current?.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Scenario controls ────────────────────────────────────────────────────
@@ -231,7 +232,7 @@ export default function DashboardPage() {
         <div className="flex-1 relative">
           <FloodMap
             networkGeoJSON={network}
-            floodNodes={floodState?.nodes ?? []}
+            floodState={floodState}
             routeResult={routeResult}
             routeState={routeState}
             onMapClick={handleMapClick}

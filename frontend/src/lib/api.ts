@@ -1,5 +1,6 @@
 // UrbanFlow v2 — Typed API Client
 // [61] /api/v1/route, /api/v1/nowcast, /api/flood/state, /ws/flood-stream
+import type { RouteResult } from '@/types/flood';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 const WS_BASE  = process.env.NEXT_PUBLIC_WS_URL  ?? 'ws://localhost:8000';
@@ -57,6 +58,8 @@ export const api = {
     fetchJSON<{ status: string }>('/api/simulation/retrain-blockage', { method: 'POST' }),
 
   getValidation: () => fetchJSON<ValidationResult>('/api/validation'),
+
+  getIncidentFeed: (limit: number = 15) => fetchJSON<any[]>(`/api/flood/incidents?limit=${limit}`),
 };
 
 export function createFloodWebSocket(
@@ -135,12 +138,6 @@ export interface NowcastAPI {
   forecasts_mm_hr: Record<string, { max_mm_hr: number; mean_mm_hr: number }>;
 }
 
-export interface RouteResult {
-  safe_route: { coordinates: { lat: number; lon: number }[]; distance_m: number; max_depth_cm: number };
-  naive_route: { coordinates: { lat: number; lon: number }[]; distance_m: number; max_depth_cm: number };
-  comparison: { distance_saved_m: number; max_depth_avoided_cm: number; safe_weight_ratio: number };
-  vehicle_class: string;
-}
 
 export interface ScenarioParams {
   scenario: string;

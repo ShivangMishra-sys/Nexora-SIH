@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createFloodWebSocket } from '@/lib/api';
-import type { FloodState } from '@/types/flood';
 
 interface UseFloodStreamOptions {
   enabled?: boolean;
@@ -10,7 +9,7 @@ interface UseFloodStreamOptions {
 }
 
 interface UseFloodStreamResult {
-  state: FloodState | null;
+  state: any;
   connected: boolean;
   lastUpdated: Date | null;
   tickCount: number;
@@ -24,7 +23,7 @@ export function useFloodStream({
   enabled = true,
   reconnectDelayMs = 2000,
 }: UseFloodStreamOptions = {}): UseFloodStreamResult {
-  const [state, setState] = useState<FloodState | null>(null);
+  const [state, setState] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [tickCount, setTickCount] = useState(0);

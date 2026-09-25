@@ -69,22 +69,21 @@ export interface RouteCoord {
 
 export interface RouteDetails {
   coordinates: RouteCoord[];
-  travel_time_s: number;
   distance_m: number;
-  node_ids: string[];
+  max_depth_cm: number;
+  node_ids?: string[];
 }
 
 export interface RouteComparison {
-  time_saved_s: number;
-  time_saved_pct: number;
-  flooded_edges_avoided: number;
-  severe_edges_avoided: number;
-  disruptive_edges_avoided: number;
+  distance_saved_m: number;
+  max_depth_avoided_cm: number;
+  safe_weight_ratio: number;
 }
 
 export interface RouteResult {
-  start: { lat: number; lon: number };
-  end: { lat: number; lon: number };
+  start: { node?: string; lat?: number; lon?: number };
+  end: { node?: string; lat?: number; lon?: number };
+  vehicle_class: string;
   safe_route: RouteDetails;
   naive_route: RouteDetails;
   comparison: RouteComparison;
