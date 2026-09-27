@@ -627,23 +627,49 @@ def _serialize_state(state: Dict) -> Dict:
 
     if isinstance(depth_cm, np.ndarray):
         from app.simulation.coupling import RISK_COLORS
-        # Sample nodes from grid for frontend rendering
+        ctx = _ctx(app.state) if "app" in globals() else None
+        G = (ctx.get("simple_G") or ctx.get("G")) if ctx else None
+        node_grid = ctx.get("node_grid_map") if ctx else None
         rows, cols = depth_cm.shape
-        sample_step = max(1, min(rows, cols) // 40)
         nodes = []
-        for r in range(0, rows, sample_step):
-            for c in range(0, cols, sample_step):
-                d = float(depth_cm[r, c])
-                risk_idx = int(risk_grid[r, c]) if isinstance(risk_grid, np.ndarray) else 0
-                risk_label = ["safe", "caution", "critical", "impassable"][risk_idx]
-                lat = BBOX_WGS84[3] - (r / rows) * (BBOX_WGS84[3] - BBOX_WGS84[1])
-                lon = BBOX_WGS84[0] + (c / cols) * (BBOX_WGS84[2] - BBOX_WGS84[0])
-                nodes.append({
-                    "lat": lat, "lon": lon,
-                    "depth_cm": round(d, 2),
-                    "risk": risk_label,
-                    "color": RISK_COLORS.get(risk_idx, "#6b7280"),
-                })
+
+        if G is not None and node_grid:
+            # Sample actual physical drainage & road junctions from the OSM road graph
+            for node_id, (r, c) in node_grid.items():
+                if 0 <= r < rows and 0 <= c < cols:
+                    d = float(depth_cm[r, c])
+                    risk_idx = int(risk_grid[r, c]) if isinstance(risk_grid, np.ndarray) else 0
+                    # Prioritize wet / flooded intersections (d >= 2 cm), plus a representative baseline sample of dry ones
+                    if d >= 2.0 or (hash(str(node_id)) % 8 == 0):
+                        node_data = G.nodes.get(node_id, {})
+                        lon = node_data.get("x", node_data.get("lon"))
+                        lat = node_data.get("y", node_data.get("lat"))
+                        if lon is not None and lat is not None:
+                            risk_label = ["safe", "caution", "critical", "impassable"][risk_idx]
+                            nodes.append({
+                                "node_id": str(node_id),
+                                "lat": round(float(lat), 6),
+                                "lon": round(float(lon), 6),
+                                "depth_cm": round(d, 2),
+                                "risk": risk_label,
+                                "color": RISK_COLORS.get(risk_idx, "#6b7280"),
+                            })
+        else:
+            # Fallback regular grid if road graph not loaded
+            sample_step = max(1, min(rows, cols) // 40)
+            for r in range(0, rows, sample_step):
+                for c in range(0, cols, sample_step):
+                    d = float(depth_cm[r, c])
+                    risk_idx = int(risk_grid[r, c]) if isinstance(risk_grid, np.ndarray) else 0
+                    risk_label = ["safe", "caution", "critical", "impassable"][risk_idx]
+                    lat = BBOX_WGS84[3] - (r / rows) * (BBOX_WGS84[3] - BBOX_WGS84[1])
+                    lon = BBOX_WGS84[0] + (c / cols) * (BBOX_WGS84[2] - BBOX_WGS84[0])
+                    nodes.append({
+                        "lat": lat, "lon": lon,
+                        "depth_cm": round(d, 2),
+                        "risk": risk_label,
+                        "color": RISK_COLORS.get(risk_idx, "#6b7280"),
+                    })
 
         result["nodes"] = nodes
         result["max_depth_cm"] = round(float(depth_cm.max()), 1)
