@@ -197,9 +197,9 @@ _ws_clients: List[WebSocket] = []
 # ---------------------------------------------------------------------------
 class ScenarioRunRequest(BaseModel):
     scenario: str = "cloudburst_extreme"
-    intensity_dbz: float = 50.0
+    intensity_dbz: float = 58.0
     storm_center: List[float] = [0.48, 0.66]
-    radius_fraction: float = 0.32
+    radius_fraction: float = 0.50
     drain_blockage_pct: float = 0.0    # [72] what-if slider
 
 class RouteRequest(BaseModel):
@@ -340,10 +340,10 @@ def health():
 @app.get("/api/scenario/list")
 def list_scenarios():
     return [
-        {"name": "cloudburst_extreme", "label": "Cloudburst", "peak_intensity_mm_hr": 99.3, "radius_km": 2.5, "duration_minutes": 180, "description": "Severe monsoon cloudburst over Anna Nagar"},
-        {"name": "monsoon_front", "label": "Monsoon Front", "peak_intensity_mm_hr": 64.0, "radius_km": 4.0, "duration_minutes": 180, "description": "Continuous widespread monsoon precipitation"},
-        {"name": "moderate_steady", "label": "Moderate Steady", "peak_intensity_mm_hr": 35.0, "radius_km": 3.0, "duration_minutes": 180, "description": "Steady continuous rainfall"},
-        {"name": "light_drizzle", "label": "Light Drizzle", "peak_intensity_mm_hr": 12.0, "radius_km": 5.0, "duration_minutes": 180, "description": "Intermittent light drizzle"},
+        {"name": "cloudburst_extreme", "label": "Cloudburst", "peak_intensity_mm_hr": 135.0, "radius_km": 5.0, "duration_minutes": 180, "description": "Severe monsoon cloudburst over Anna Nagar"},
+        {"name": "monsoon_front", "label": "Monsoon Front", "peak_intensity_mm_hr": 60.0, "radius_km": 7.5, "duration_minutes": 180, "description": "Continuous widespread monsoon precipitation"},
+        {"name": "moderate_steady", "label": "Moderate Steady", "peak_intensity_mm_hr": 32.0, "radius_km": 6.5, "duration_minutes": 180, "description": "Steady continuous rainfall"},
+        {"name": "light_drizzle", "label": "Light Drizzle", "peak_intensity_mm_hr": 12.0, "radius_km": 6.0, "duration_minutes": 180, "description": "Broad light drizzle"},
     ]
 
 
@@ -837,7 +837,7 @@ def get_nowcast():
 
 @app.get("/api/network/graph")
 def get_network_graph():
-    """GeoJSON FeatureCollection of nodes + edges for map rendering."""
+    """GeoJSON FeatureCollection of nodes + edges with prioritized flooded road segments."""
     ctx = _ctx(app.state)
     if ctx is None:
         return {"type": "FeatureCollection", "features": []}
@@ -849,35 +849,70 @@ def get_network_graph():
     depth_map = _depth_at_nodes(ctx)
     features = []
 
-    # Node features
-    for node, data in list(G.nodes(data=True))[:500]:   # cap for performance
-        lon = data.get("x", data.get("lon", 80.21))
-        lat = data.get("y", data.get("lat", 13.09))
-        d = depth_map.get(str(node), 0.0)
-        risk = "safe" if d < 5 else "caution" if d < 15 else "critical" if d < 30 else "impassable"
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon, lat]},
-            "properties": {"node_id": str(node), "depth_cm": d, "risk": risk,
-                           "elevation": data.get("elevation", 5.0)},
-        })
+    # 1. Edge features: Prioritize ALL flooded road segments, plus representative road corridors
+    flooded_edges = []
+    normal_edges = []
 
-    # Edge features
-    for u, v, data in list(G.edges(data=True))[:1000]:
-        u_data = G.nodes[u]; v_data = G.nodes[v]
-        u_lon = u_data.get("x", u_data.get("lon", 80.21))
-        u_lat = u_data.get("y", u_data.get("lat", 13.09))
-        v_lon = v_data.get("x", v_data.get("lon", 80.21))
-        v_lat = v_data.get("y", v_data.get("lat", 13.09))
+    for u, v, data in G.edges(data=True):
+        u_data = G.nodes.get(u)
+        v_data = G.nodes.get(v)
+        if not u_data or not v_data:
+            continue
+        u_lon = u_data.get("x", u_data.get("lon"))
+        u_lat = u_data.get("y", u_data.get("lat"))
+        v_lon = v_data.get("x", v_data.get("lon"))
+        v_lat = v_data.get("y", v_data.get("lat"))
+        if u_lon is None or u_lat is None or v_lon is None or v_lat is None:
+            continue
+
         d = max(depth_map.get(str(u), 0.0), depth_map.get(str(v), 0.0))
         risk = "safe" if d < 5 else "caution" if d < 15 else "critical" if d < 30 else "impassable"
-        features.append({
+        feat = {
             "type": "Feature",
-            "geometry": {"type": "LineString", "coordinates": [[u_lon, u_lat], [v_lon, v_lat]]},
-            "properties": {"depth_cm": d, "risk": risk,
-                           "highway": data.get("highway", ""),
-                           "high_risk": bool(data.get("high_risk_depression", False))},
-        })
+            "geometry": {"type": "LineString", "coordinates": [[round(float(u_lon), 6), round(float(u_lat), 6)], [round(float(v_lon), 6), round(float(v_lat), 6)]]},
+            "properties": {
+                "depth_cm": round(float(d), 2),
+                "risk": risk,
+                "highway": str(data.get("highway", "")),
+                "high_risk": bool(data.get("high_risk_depression", False)),
+            },
+        }
+        if d >= 2.0:
+            flooded_edges.append(feat)
+        else:
+            normal_edges.append(feat)
+
+    # Always deliver ALL flooded road edges, plus up to 3000 background road edges
+    selected_edges = flooded_edges + normal_edges[:max(800, 3200 - len(flooded_edges))]
+    features.extend(selected_edges)
+
+    # 2. Node features: Prioritize flooded junctions
+    flooded_nodes = []
+    normal_nodes = []
+    for node, data in G.nodes(data=True):
+        lon = data.get("x", data.get("lon"))
+        lat = data.get("y", data.get("lat"))
+        if lon is None or lat is None:
+            continue
+        d = depth_map.get(str(node), 0.0)
+        risk = "safe" if d < 5 else "caution" if d < 15 else "critical" if d < 30 else "impassable"
+        feat = {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(float(lon), 6), round(float(lat), 6)]},
+            "properties": {
+                "node_id": str(node),
+                "depth_cm": round(float(d), 2),
+                "risk": risk,
+                "elevation": float(data.get("elevation", 5.0)),
+            },
+        }
+        if d >= 2.0:
+            flooded_nodes.append(feat)
+        elif hash(str(node)) % 8 == 0:
+            normal_nodes.append(feat)
+
+    selected_nodes = flooded_nodes + normal_nodes[:max(400, 1200 - len(flooded_nodes))]
+    features.extend(selected_nodes)
 
     return {"type": "FeatureCollection", "features": features}
 

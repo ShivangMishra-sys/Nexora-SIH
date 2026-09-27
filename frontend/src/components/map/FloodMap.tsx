@@ -11,19 +11,20 @@ const ANNA_NAGAR_ZOOM = 13;
 
 // Risk → MapLibre color expression
 const RISK_COLOR_EXPR = [
-  'match', ['get', 'risk'],
-  'safe',       '#6b7280',
+  'match', ['coalesce', ['get', 'risk'], 'safe'],
+  'safe',       '#475569',
   'caution',    '#f59e0b',
   'critical',   '#f97316',
   'impassable', '#ef4444',
-  '#6b7280',
+  '#475569',
 ] as unknown as maplibregl.ExpressionSpecification;
 
 const DEPTH_WIDTH_EXPR = [
-  'interpolate', ['linear'], ['get', 'depth_cm'],
+  'interpolate', ['linear'], ['coalesce', ['get', 'depth_cm'], 0],
   0, 1.5,
-  15, 3.0,
-  30, 5.5,
+  5, 3.5,
+  15, 5.5,
+  30, 8.5,
 ] as unknown as maplibregl.ExpressionSpecification;
 
 interface FloodMapProps {
@@ -156,8 +157,28 @@ export default function FloodMap({
         },
       });
 
-      // Network edges layer
+      // Network edges and nodes source
       map.addSource('network', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+      // Flooded roads ambient glow layer
+      map.addLayer({
+        id: 'network-edges-glow',
+        type: 'line',
+        source: 'network',
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['>', ['coalesce', ['get', 'depth_cm'], 0], 2.0]],
+        paint: {
+          'line-color': RISK_COLOR_EXPR,
+          'line-width': [
+            'interpolate', ['linear'], ['coalesce', ['get', 'depth_cm'], 0],
+            2, 6.0,
+            15, 11.0,
+            30, 16.0,
+          ],
+          'line-opacity': 0.45,
+        },
+      });
+
+      // Network edges layer (roads)
       map.addLayer({
         id: 'network-edges',
         type: 'line',

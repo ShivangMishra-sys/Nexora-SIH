@@ -162,19 +162,30 @@ SCENARIOS: Dict[str, StormCell] = {
     "cloudburst_extreme": StormCell(
         center_lat=_BASE_LAT,
         center_lon=_BASE_LON,
-        intensity_mm_hr=100.0,
-        radius_km=3.5,
+        intensity_mm_hr=135.0,
+        radius_km=5.0,
         vel_lat_ms=0.3,      # slow northward drift
         vel_lon_ms=1.5,      # moving east through the bbox
         decay_rate=0.002,    # very slow decay → sustained event
         start_time_min=0.0,
         end_time_min=180.0,
     ),
+    "monsoon_front": StormCell(
+        center_lat=_BASE_LAT,
+        center_lon=_BASE_LON,
+        intensity_mm_hr=60.0,
+        radius_km=7.5,       # wide, pervasive monsoon front
+        vel_lat_ms=0.2,
+        vel_lon_ms=1.0,
+        decay_rate=0.001,
+        start_time_min=0.0,
+        end_time_min=180.0,
+    ),
     "moderate_steady": StormCell(
         center_lat=_BASE_LAT,
         center_lon=_BASE_LON,
-        intensity_mm_hr=25.0,
-        radius_km=8.0,       # wide, stratiform rain
+        intensity_mm_hr=32.0,
+        radius_km=6.5,       # wide, stratiform rain
         vel_lat_ms=0.2,
         vel_lon_ms=0.8,
         decay_rate=0.001,
@@ -184,13 +195,24 @@ SCENARIOS: Dict[str, StormCell] = {
     "heavy_localized": StormCell(
         center_lat=_BASE_LAT + 0.03,
         center_lon=_BASE_LON + 0.02,
-        intensity_mm_hr=60.0,
-        radius_km=2.0,       # tight convective cell
+        intensity_mm_hr=75.0,
+        radius_km=3.5,       # convective cell
         vel_lat_ms=0.5,
         vel_lon_ms=2.0,
-        decay_rate=0.005,    # fast-moving, quick decay
-        start_time_min=10.0,
-        end_time_min=120.0,
+        decay_rate=0.004,
+        start_time_min=5.0,
+        end_time_min=140.0,
+    ),
+    "light_drizzle": StormCell(
+        center_lat=_BASE_LAT,
+        center_lon=_BASE_LON,
+        intensity_mm_hr=12.0,
+        radius_km=6.0,       # broad light drizzle
+        vel_lat_ms=0.1,
+        vel_lon_ms=0.5,
+        decay_rate=0.001,
+        start_time_min=0.0,
+        end_time_min=180.0,
     ),
 }
 

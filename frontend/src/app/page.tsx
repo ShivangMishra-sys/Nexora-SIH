@@ -28,10 +28,10 @@ const RISK_COLORS = {
 };
 
 const SCENARIOS = [
-  { id: 'cloudburst_extreme', label: 'Cloudburst', sublabel: 'Extreme', dbz: 55, icon: '⛈️', color: '#ef4444' },
-  { id: 'monsoon_front',      label: 'Monsoon',    sublabel: 'Front',   dbz: 45, icon: '🌧️', color: '#f97316' },
-  { id: 'moderate_steady',    label: 'Moderate',   sublabel: 'Steady',  dbz: 38, icon: '🌦️', color: '#f59e0b' },
-  { id: 'light_drizzle',      label: 'Light',      sublabel: 'Drizzle', dbz: 25, icon: '🌂', color: '#3b82f6' },
+  { id: 'cloudburst_extreme', label: 'Cloudburst', sublabel: 'Extreme', dbz: 58, radius_fraction: 0.50, icon: '⛈️', color: '#ef4444' },
+  { id: 'monsoon_front',      label: 'Monsoon',    sublabel: 'Front',   dbz: 50, radius_fraction: 0.60, icon: '🌧️', color: '#f97316' },
+  { id: 'moderate_steady',    label: 'Moderate',   sublabel: 'Steady',  dbz: 42, radius_fraction: 0.52, icon: '🌦️', color: '#f59e0b' },
+  { id: 'light_drizzle',      label: 'Light',      sublabel: 'Drizzle', dbz: 32, radius_fraction: 0.45, icon: '🌂', color: '#3b82f6' },
 ];
 
 // ── Main Dashboard ────────────────────────────────────────────────────────
@@ -125,9 +125,9 @@ export default function DashboardPage() {
           const sc = SCENARIOS.find(s => s.id === activeScenario);
           await api.runScenario({
             scenario: activeScenario,
-            intensity_dbz: sc?.dbz ?? 50,
+            intensity_dbz: sc?.dbz ?? 58,
             storm_center: [0.48, 0.66],
-            radius_fraction: 0.32,
+            radius_fraction: sc?.radius_fraction ?? 0.50,
             drain_blockage_pct: blockagePct,
           });
           setTimelineT(0);
@@ -150,17 +150,17 @@ export default function DashboardPage() {
     setIsPlaying(true);
     setIsScrubbing(false);
 
-    const sc = SCENARIOS.find(s => s.id === id);
-    addAlert(`Scenario: ${sc?.label ?? id} (${dbz} dBZ) — simulation started`);
+      const sc = SCENARIOS.find(s => s.id === id);
+      addAlert(`Scenario: ${sc?.label ?? id} (${dbz} dBZ) — simulation started`);
 
-    try {
-      const res = await api.runScenario({
-        scenario: id,
-        intensity_dbz: dbz,
-        storm_center: [0.48, 0.66],
-        radius_fraction: 0.32,
-        drain_blockage_pct: blockagePct,
-      });
+      try {
+        const res = await api.runScenario({
+          scenario: id,
+          intensity_dbz: dbz,
+          storm_center: [0.48, 0.66],
+          radius_fraction: sc?.radius_fraction ?? 0.50,
+          drain_blockage_pct: blockagePct,
+        });
 
       if ((res as any)?.state) {
         setFloodState((res as any).state);
@@ -187,9 +187,9 @@ export default function DashboardPage() {
     setIsScrubbing(false);
     await api.runScenario({
       scenario: activeScenario,
-      intensity_dbz: sc.dbz,
+      intensity_dbz: sc?.dbz ?? 58,
       storm_center: [0.48, 0.66],
-      radius_fraction: 0.32,
+      radius_fraction: sc?.radius_fraction ?? 0.50,
       drain_blockage_pct: blockagePct,
     });
     addAlert(`Drain blockage what-if: ${blockagePct}% — simulation reset`);

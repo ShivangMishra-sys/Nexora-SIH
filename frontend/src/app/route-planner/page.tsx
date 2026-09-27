@@ -36,10 +36,29 @@ export default function RoutePlannerPage() {
     startRouteSelection, handleMapClick, clearRoute, setHoveredNodeId, setPresetRoute,
   } = useMapInteraction({ vehicleClass });
   const [networkGeoJSON, setNetworkGeoJSON] = useState<GeoJSONFeatureCollection | null>(null);
+  const [floodState, setFloodState] = useState<any>(null);
+
+  const loadData = useCallback(() => {
+    Promise.all([
+      api.getFloodState().catch(() => null),
+      api.getNetworkGraph().catch(() => null),
+    ]).then(([state, graph]) => {
+      if (state) setFloodState(state);
+      if (graph) setNetworkGeoJSON(graph);
+    });
+  }, []);
 
   useEffect(() => {
-    api.getNetworkGraph().then(setNetworkGeoJSON).catch(console.error);
-  }, []);
+    loadData();
+    const interval = setInterval(loadData, 5000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  useEffect(() => {
+    if (liveState) {
+      loadData();
+    }
+  }, [liveState, loadData]);
 
   const routeResult = routeState.step === 'done' ? routeState.result : null;
 
@@ -96,13 +115,46 @@ export default function RoutePlannerPage() {
         {/* Full-screen map */}
         <div style={{ flex: 1, position: 'relative' }}>
           <FloodMap
-            floodState={liveState as any}
+            floodState={floodState}
             networkGeoJSON={networkGeoJSON}
             routeResult={routeResult}
             routeState={routeState}
             onMapClick={handleMapClick}
             onNodeHover={id => setHoveredNodeId(id)}
           />
+
+          {/* Bottom-left: Road Flooding & Route Legend */}
+          <div style={{
+            position: 'absolute', bottom: 24, left: 16, zIndex: 10,
+            background: 'rgba(8,13,26,0.92)', border: '1px solid rgba(255,255,255,0.09)',
+            borderRadius: 12, backdropFilter: 'blur(20px)', padding: '10px 14px',
+            display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          }}>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.4)', marginBottom: 2 }}>
+              Road Flood Status & Routing
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 14, height: 4, borderRadius: 2, background: '#22c55e' }} />
+              <span style={{ color: '#86efac', fontWeight: 600 }}>Flood-Safe Detour</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 14, height: 3, borderTop: '2px dashed #94a3b8' }} />
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>Standard Path (Flooded)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 14, height: 4, borderRadius: 2, background: '#f59e0b', boxShadow: '0 0 6px #f59e0b' }} />
+              <span style={{ color: '#fbbf24' }}>Caution Road Inundation (5–15cm)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 14, height: 5, borderRadius: 2, background: '#f97316', boxShadow: '0 0 8px #f97316' }} />
+              <span style={{ color: '#fb923c' }}>Critical Flooded Road (15–30cm)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 14, height: 6, borderRadius: 2, background: '#ef4444', boxShadow: '0 0 10px #ef4444' }} />
+              <span style={{ color: '#f87171' }}>Impassable Road (&gt;30cm)</span>
+            </div>
+          </div>
 
           {/* Top-left: Route control panel */}
           <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 10, width: 280 }}>
