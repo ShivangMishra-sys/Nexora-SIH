@@ -32,14 +32,14 @@ export function useSimulation(): UseSimulationResult {
   useEffect(() => {
     api.listScenarios()
       .then(setScenarios)
-      .catch((e) => setError(String(e)));
+      .catch((e: any) => setError(String(e)));
   }, []);
 
   // Poll status every 3s for sim clock updates
   useEffect(() => {
     const poll = () => {
       api.getStatus()
-        .then((s) => {
+        .then((s: any) => {
           setStatus(s);
           if (s.scenario) setActiveScenario(s.scenario);
           setIsPlaying(!s.is_paused && s.is_running);

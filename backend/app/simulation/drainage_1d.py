@@ -106,17 +106,28 @@ def compute_blockage_derating(
     RC_MAP = {"primary": 0, "secondary": 1, "tertiary": 2,
               "residential": 3, "service": 4, "default": 2}
     derating = {}
+    
+    edges_list = list(G.edges(data=True))
+    if not edges_list:
+        return derating
 
-    for u, v, data in G.edges(data=True):
+    # Prepare batch features
+    features = []
+    edge_keys = []
+    
+    for u, v, data in edges_list:
         age = float(data.get("pipe_age_yr", 20.0))
         lulc = float(lulc_class_map.get(u, 50) if lulc_class_map else 50)
         debris = float(data.get("debris_history", 0.3))
         rc = float(RC_MAP.get(str(data.get("highway", "default")), 2))
+        features.append([age, lulc, debris, rc])
+        edge_keys.append((u, v))
 
-        X = np.array([[age, lulc, debris, rc]])
-        prob = clf.predict_proba(X)[0][1]   # probability of blockage
+    # Predict in one batch (instantaneous)
+    X = np.array(features)
+    probs = clf.predict_proba(X)[:, 1]
 
-        # Derating: fully blocked → 0.3 capacity; clean → 1.0
+    for (u, v), prob in zip(edge_keys, probs):
         derating[(u, v)] = 1.0 - 0.7 * prob
 
     return derating
@@ -183,19 +194,26 @@ def generate_inp_from_osm_graph(
     try:
         model = swmmio.Model.create_blank()
 
+        import pandas as pd
+        
         # [18] Junctions — road intersections as manhole/inlet proxies
+        junction_rows = []
         for node_id, data in G.nodes(data=True):
             elev = float(data.get("elevation", 5.0))
-            model.inp.junctions.loc[str(node_id)] = {
+            junction_rows.append({
+                "Name": str(node_id),
                 "InvertElev":     elev - 1.0,   # 1m cover depth
                 "MaxDepth":       1.5,
                 "InitDepth":      0.0,
                 "SurchargeDepth": 0.0,
                 "PondedArea":     0.0,
-            }
+            })
+        if junction_rows:
+            j_df = pd.DataFrame(junction_rows).set_index("Name")
+            model.inp.junctions = pd.concat([model.inp.junctions, j_df])
 
-        # [19] Lowest-elevation node → OUTFALL
-        outfall_node = min(G.nodes(data=True), key=lambda x: x[1].get("elevation", 999.0))[0]
+        # [19] Lowest-elevation node → OUTFALL (strictly smallest rank)
+        outfall_node = min(G.nodes(data=True), key=lambda x: (float(x[1].get("elevation", 999.0)), str(x[0])))[0]
         outfall_elev = float(G.nodes[outfall_node].get("elevation", 0.0)) - 2.0
         model.inp.outfalls.loc[str(outfall_node)] = {
             "InvertElev":  outfall_elev,
@@ -205,31 +223,59 @@ def generate_inp_from_osm_graph(
         if str(outfall_node) in model.inp.junctions.index:
             model.inp.junctions.drop(str(outfall_node), inplace=True)
 
-        # [20][22] Conduits — road edges as proxy pipes
+        # [20][22] Conduits — road edges as proxy pipes (directed strictly downhill to prevent cycles)
+        conduit_rows = []
+        xsection_rows = []
+        seen_pairs = set()
         for u, v, data in G.edges(data=True):
+            pair = tuple(sorted([str(u), str(v)]))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            u_key = (float(G.nodes[u].get("elevation", 5.0)), str(u))
+            v_key = (float(G.nodes[v].get("elevation", 5.0)), str(v))
+
+            # Orient downhill: higher total rank is inlet, lower is outlet (strict DAG)
+            if u_key > v_key:
+                inlet, outlet = str(u), str(v)
+            else:
+                inlet, outlet = str(v), str(u)
+
+            if inlet == outlet:
+                continue
+
             road_class = str(data.get("highway", "default"))
             diameter = DIAMETER_BY_CLASS.get(road_class, DIAMETER_BY_CLASS["default"])
 
             # [25] Apply blockage-model capacity derating
             derate = 1.0
             if blockage_derating:
-                derate = blockage_derating.get((u, v), 1.0)
+                derate = blockage_derating.get((u, v), blockage_derating.get((v, u), 1.0))
             eff_diameter = diameter * derate
 
-            cid = f"C_{u}_{v}"
+            cid = f"C_{inlet}_{outlet}"
             length = max(1.0, float(data.get("length", 50.0)))
-            model.inp.conduits.loc[cid] = {
-                "InletNode":  str(u),
-                "OutletNode": str(v),
+            conduit_rows.append({
+                "Name": cid,
+                "InletNode":  inlet,
+                "OutletNode": outlet,
                 "Length":     length,
                 "Roughness":  0.013,   # [22] Manning's n for concrete pipes
                 "InOffset":   0.0,
                 "OutOffset":  0.0,
-            }
-            model.inp.xsections.loc[cid] = {
+            })
+            xsection_rows.append({
+                "Link": cid,
                 "Shape": "CIRCULAR",
                 "Geom1": eff_diameter,
-            }
+            })
+            
+        if conduit_rows:
+            c_df = pd.DataFrame(conduit_rows).set_index("Name")
+            x_df = pd.DataFrame(xsection_rows).set_index("Link")
+            model.inp.conduits = pd.concat([model.inp.conduits, c_df])
+            model.inp.xsections = pd.concat([model.inp.xsections, x_df])
 
         # [RAINGAGES] Feed PySTEPS forecast as SWMM rainfall timeseries
         if rain_timeseries:
@@ -278,7 +324,11 @@ def _write_minimal_inp(G, output_path, blockage_derating, rain_timeseries) -> Pa
         "[OPTIONS]",
         "FLOW_UNITS        CMS",
         "INFILTRATION      HORTON",
-        "FLOW_ROUTING      KINWAVE",
+        "FLOW_ROUTING      DYNWAVE",
+        "INERTIAL_DAMPING  PARTIAL",
+        "NORMAL_FLOW_LIMIT BOTH",
+        "VARIABLE_STEP     0.75",
+        "LENGTHENING_STEP  0",
         "START_DATE        01/01/2026",
         "START_TIME        00:00:00",
         "END_DATE          01/01/2026",
@@ -296,7 +346,7 @@ def _write_minimal_inp(G, output_path, blockage_derating, rain_timeseries) -> Pa
     if not nodes_list:
         lines += ["DUMMY_NODE  0.0  2.0  0.0  0.0  0.0"]
     else:
-        outfall_node = min(nodes_list, key=lambda x: x[1].get("elevation", 999.0))[0]
+        outfall_node = min(nodes_list, key=lambda x: (float(x[1].get("elevation", 999.0)), str(x[0])))[0]
         for node_id, data in nodes_list:
             if node_id == outfall_node:
                 continue
@@ -310,18 +360,34 @@ def _write_minimal_inp(G, output_path, blockage_derating, rain_timeseries) -> Pa
 
     lines += ["", "[CONDUITS]",
               ";;Name  From  To  Length  Roughness  InOffset  OutOffset"]
+    lines_x = ["", "[XSECTIONS]", ";;Link  Shape  Geom1  Geom2  Geom3  Geom4"]
+    seen_pairs = set()
     for u, v, data in G.edges(data=True):
-        length = max(1.0, float(data.get("length", 50.0)))
-        lines.append(f"C{u}_{v}  N{u}  N{v}  {length:.1f}  0.013  0  0")
+        pair = tuple(sorted([str(u), str(v)]))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
 
-    lines += ["", "[XSECTIONS]", ";;Link  Shape  Geom1  Geom2  Geom3  Geom4"]
-    for u, v, data in G.edges(data=True):
+        u_key = (float(G.nodes[u].get("elevation", 5.0)), str(u))
+        v_key = (float(G.nodes[v].get("elevation", 5.0)), str(v))
+        if u_key > v_key:
+            inlet, outlet = u, v
+        else:
+            inlet, outlet = v, u
+
+        if inlet == outlet:
+            continue
+
+        length = max(1.0, float(data.get("length", 50.0)))
+        lines.append(f"C{inlet}_{outlet}  N{inlet}  N{outlet}  {length:.1f}  0.013  0  0")
+
         rc = str(data.get("highway", "default"))
         d = DIAMETER_BY_CLASS.get(rc, 0.3)
-        derate = blockage_derating.get((u, v), 1.0) if blockage_derating else 1.0
-        lines.append(f"C{u}_{v}  CIRCULAR  {d * derate:.3f}  0  0  0")
+        derate = blockage_derating.get((u, v), blockage_derating.get((v, u), 1.0)) if blockage_derating else 1.0
+        lines_x.append(f"C{inlet}_{outlet}  CIRCULAR  {d * derate:.3f}  0  0  0")
 
-    lines += ["", "[END]", ""]
+    lines += lines_x
+    lines += ["", ""]
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
     logger.info(f"[18][20] Minimal SWMM .inp written → {output_path}")
@@ -492,8 +558,8 @@ def add_synthetic_pump(model_inp_path: Path, pump_node: str = "PUMP_KOYAMBEDU") 
 [CURVES]
 ;;Name  Type  X  Y
 PUMP_CRV1  PUMP3  0.0  0.0
-PUMP_CRV1  PUMP3  1.0  0.5
-PUMP_CRV1  PUMP3  2.0  1.0
+PUMP_CRV1         1.0  0.5
+PUMP_CRV1         2.0  1.0
 
 [JUNCTIONS]
 SUMP_{pump_node}  3.0  2.0  0.0  0.0  0.0

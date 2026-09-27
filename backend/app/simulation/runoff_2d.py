@@ -90,10 +90,14 @@ def rational_method_runoff(
 # ---------------------------------------------------------------------------
 # Flow routing
 # ---------------------------------------------------------------------------
+from numba import njit
+import numpy as np
+
+@njit(cache=True)
 def route_d8_flow(
-    inflow_volume: np.ndarray,   # m³ per cell per tick
-    flow_direction: np.ndarray,  # D8 direction matrix
-) -> Tuple[np.ndarray, np.ndarray]:
+    inflow_volume: np.ndarray,
+    flow_direction: np.ndarray,
+) -> tuple:
     """
     [33] Route overland inflow volume one step downstream via D8.
     Returns (outflow_from_each_cell, inflow_into_each_cell).
@@ -108,7 +112,16 @@ def route_d8_flow(
             if vol <= 0:
                 continue
             d = flow_direction[r, c]
-            dr, dc = D8_DIRECTIONS[d]
+            dr, dc = 0, 0
+            if d == 1:   dr, dc = 0, 1
+            elif d == 2: dr, dc = 1, 1
+            elif d == 4: dr, dc = 1, 0
+            elif d == 8: dr, dc = 1, -1
+            elif d == 16: dr, dc = 0, -1
+            elif d == 32: dr, dc = -1, -1
+            elif d == 64: dr, dc = -1, 0
+            elif d == 128: dr, dc = -1, 1
+            
             nr, nc = r + dr, c + dc
             if 0 <= nr < rows and 0 <= nc < cols:
                 in_volume[nr, nc] += vol
@@ -144,7 +157,12 @@ class SurfaceRunoffModel:
         self.slope_x      = np.zeros(grid_shape, dtype=np.float32)
         self.slope_y      = np.zeros(grid_shape, dtype=np.float32)
         self.runoff_coeff = np.full(grid_shape, 0.7, dtype=np.float32)  # default C
+        self.accumulation_factor = np.ones(grid_shape, dtype=np.float32)
         self.surcharge_input = np.zeros(grid_shape, dtype=np.float32)   # from SWMM [39]
+        self.depth_cm = np.zeros(grid_shape, dtype=np.float32)
+        self.depth_increment = np.zeros(grid_shape, dtype=np.float32)
+        self.q_m3_hr = np.zeros(grid_shape, dtype=np.float32)
+        self.velocity = np.zeros(grid_shape, dtype=np.float32)
 
         logger.info(f"SurfaceRunoffModel ready — {rows}×{cols} @ {cell_res_m}m")
 
@@ -160,6 +178,12 @@ class SurfaceRunoffModel:
         self.slope_x      = np.resize(slope_x, self.grid_shape).astype(np.float32)
         self.slope_y      = np.resize(slope_y, self.grid_shape).astype(np.float32)
         self.runoff_coeff = np.resize(runoff_coeff, self.grid_shape).astype(np.float32)
+
+        # Topographic runoff accumulation: low-elevation cells collect runoff from surrounding area
+        dem_arr = np.resize(dem, self.grid_shape).astype(np.float32)
+        d_min, d_max = float(dem_arr.min()), float(dem_arr.max())
+        dem_norm = (dem_arr - d_min) / max(0.1, d_max - d_min)
+        self.accumulation_factor = np.clip(1.0 + (1.0 - dem_norm) ** 1.8 * 8.0, 1.0, 9.0).astype(np.float32)
         logger.info("SurfaceRunoffModel initialized from DEM/land-cover")
 
     def tick(
@@ -168,56 +192,42 @@ class SurfaceRunoffModel:
         dt_s: float = 60.0,            # [47] timestep in seconds
     ) -> dict:
         """
-        [32][33][34][35][36] Advance model one timestep:
-          1. Rational Method → volumetric inflow
-          2. D8 routing
-          3. Mass-balance depth update
-          4. Kinematic-wave velocity
-          5. Compute depth in cm
+        [32][34][35][36] Advance model one timestep (memory-efficient):
+          1. Rational Method with topographic convergence → direct depth accumulation
+          2. Kinematic-wave decay
+          3. Compute depth in cm + velocity
         """
         dt_hr = dt_s / 3600.0
 
-        # [32] Q = C · I · A (m³/hr → m³ per tick)
-        Q_m3_hr = rational_method_runoff(net_rain_mm_hr, self.runoff_coeff, self.cell_area)
-        Q_tick   = Q_m3_hr * dt_hr   # m³ added this tick
+        # [32] In-place math to avoid OOM
+        effective_c = self.runoff_coeff * self.accumulation_factor
+        np.multiply(effective_c, net_rain_mm_hr, out=self.depth_increment)
+        self.depth_increment *= (dt_hr / 1000.0)
 
-        # [33] Route flow downstream
-        _, inflow = route_d8_flow(Q_tick, self.flow_dir)
+        # [39] Add SWMM surcharge
+        self.depth_increment += (self.surcharge_input * dt_hr)
 
-        # [39] Add SWMM surcharge (from flooded manholes)
-        inflow += self.surcharge_input * dt_hr
+        # [35] Accumulate depth
+        self.depth_m += self.depth_increment
+        np.maximum(self.depth_m, 0.0, out=self.depth_m)
 
-        # [35] Mass-balance: depth += inflow / cell_area
-        outflow_est = overland_flow_step(
+        # Apply kinematic-wave decay (drains water based on slope + Manning's)
+        self.depth_m = overland_flow_step(
             self.depth_m, self.slope_x, self.slope_y, dt_s, self.n_manning
-        ) * 0.0   # overland_flow_step returns updated depth, not outflow
-
-        # Update depth directly from mass-balance
-        new_depth = mass_balance_update(
-            self.depth_m,
-            inflow / self.cell_area,        # m inflow per m²
-            np.zeros_like(self.depth_m),    # outflow handled by routing
-            dt_s,
-            1.0,                            # per unit area
         )
-
-        # Apply kinematic-wave decay
-        new_depth = overland_flow_step(
-            new_depth, self.slope_x, self.slope_y, dt_s, self.n_manning
-        )
-        self.depth_m = new_depth
 
         # [34][37] Flow velocity
-        velocity = compute_flow_velocity(self.depth_m, self.slope_x, self.slope_y, self.n_manning)
+        compute_flow_velocity(self.depth_m, self.slope_x, self.slope_y, self.n_manning, out=self.velocity)
 
         # [36] Depth in cm
-        depth_cm = self.depth_m * 100.0
+        np.multiply(self.depth_m, 100.0, out=self.depth_cm)
+        np.multiply(self.depth_increment, (self.cell_area / dt_hr), out=self.q_m3_hr)
 
         return {
             "depth_m":    self.depth_m,
-            "depth_cm":   depth_cm,
-            "velocity_m_s": velocity,
-            "q_m3_hr":    Q_m3_hr,
+            "depth_cm":   self.depth_cm,
+            "velocity_m_s": self.velocity,
+            "q_m3_hr":    self.q_m3_hr,
         }
 
     def apply_swmm_surcharge(self, surcharge_map: np.ndarray) -> None:

@@ -1,6 +1,6 @@
 // UrbanFlow v2 — Typed API Client
 // [61] /api/v1/route, /api/v1/nowcast, /api/flood/state, /ws/flood-stream
-import type { RouteResult } from '@/types/flood';
+import type { RouteResult, FloodState, GeoJSONFeatureCollection } from '@/types/flood';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 const WS_BASE  = process.env.NEXT_PUBLIC_WS_URL  ?? 'ws://localhost:8000';
@@ -16,11 +16,11 @@ async function fetchJSON<T>(path: string, opts?: RequestInit): Promise<T> {
 
 export const api = {
   getFloodState: (t?: number) =>
-    fetchJSON<FloodStateAPI>(`/api/flood/state${t !== undefined ? `?t=${t}` : ''}`),
+    fetchJSON<FloodState>(`/api/flood/state${t !== undefined ? `?t=${t}` : ''}`),
 
   getFloodSummary: () => fetchJSON<FloodSummary>('/api/flood/summary'),
 
-  getNetworkGraph: () => fetchJSON<GeoJSONCollection>('/api/network/graph'),
+  getNetworkGraph: () => fetchJSON<GeoJSONFeatureCollection>('/api/network/graph'),
 
   getBBox: () => fetchJSON<{ bbox: number[]; city: string }>('/api/network/bbox'),
 
@@ -32,16 +32,25 @@ export const api = {
     start: [number, number],
     end:   [number, number],
     vehicle_class = 'car',
-  ) => fetchJSON<RouteResult>('/api/route/safe', {
+  ) => fetchJSON<RouteResult>('/api/v1/route', {
     method: 'POST',
     body: JSON.stringify({ start, end, vehicle_class }),
   }),
 
-  runScenario: (params: ScenarioParams) =>
-    fetchJSON<{ status: string }>('/api/scenario/run', {
+  runScenario: (params: ScenarioParams | string) => {
+    const body = typeof params === 'string' 
+      ? { scenario: params, intensity_dbz: 50, storm_center: [0.5, 0.5], radius_fraction: 0.25, drain_blockage_pct: 0 }
+      : params;
+    return fetchJSON<{ status: string }>('/api/scenario/run', {
       method: 'POST',
-      body: JSON.stringify(params),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
+
+  listScenarios: () => fetchJSON<any[]>('/api/scenario/list'),
+  getStatus: () => fetchJSON<any>('/api/scenario/status'),
+  pause: () => fetchJSON<{ status: string }>('/api/scenario/pause', { method: 'POST' }),
+  resume: () => fetchJSON<{ status: string }>('/api/scenario/resume', { method: 'POST' }),
 
   testAlert: (message: string, depth_cm: number) =>
     fetchJSON<{ status: string }>('/api/alerts/test', {
@@ -100,6 +109,7 @@ export interface FloodStateAPI {
 export interface FloodSummary {
   max_depth_cm: number;
   mean_depth_cm: number;
+  severe_count?: number;
   safe_pct: number;
   caution_pct: number;
   critical_pct: number;
@@ -122,16 +132,7 @@ export interface ValidationResult {
   f1_flood_detection?: number;
 }
 
-export interface GeoJSONCollection {
-  type: 'FeatureCollection';
-  features: GeoJSONFeature[];
-}
 
-export interface GeoJSONFeature {
-  type: 'Feature';
-  geometry: { type: 'Point' | 'LineString'; coordinates: number[] | number[][] };
-  properties: Record<string, unknown>;
-}
 
 export interface NowcastAPI {
   bbox: number[];

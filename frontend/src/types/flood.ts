@@ -33,6 +33,7 @@ export interface FloodState {
   storm_center: { lat: number; lon: number };
   summary: FloodSummary;
   nodes: FloodNode[];
+  validation?: { rmse_cm?: number; f1_flood_detection?: number };
 }
 
 export interface ScenarioInfo {

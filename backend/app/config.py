@@ -43,8 +43,8 @@ H3_RESOLUTION     = 10          # [45] H3 hex resolution (~15m edge)
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
-SIMULATION_DT_S        = 60     # [47] internal timestep, seconds
-SIMULATION_DT_MIN      = 1      # minutes
+SIMULATION_DT_S        = 300    # [47] internal timestep, 5 minutes (300 seconds)
+SIMULATION_DT_MIN      = 5      # minutes
 FORECAST_HORIZONS_MIN  = [15, 30, 60, 120, 180]   # [48] cached snapshots
 PYSTEPS_BUFFER_FRAMES  = 10     # [14] rolling buffer for optical-flow
 ENSEMBLE_MEMBERS       = 20     # [49] Monte Carlo ensemble size

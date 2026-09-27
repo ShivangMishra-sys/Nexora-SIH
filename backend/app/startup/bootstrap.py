@@ -35,11 +35,23 @@ _BREACHED = DEM_BREACHED
 
 def ensure_dem() -> Path:
     """[1][46][44][56] Ensure hydro-enforced 10m DEM exists."""
+    import rasterio
     from app.data.terrain import (
         _generate_synthetic_dem, reproject_to_utm,
         resample_to_resolution, breach_depressions,
         compute_slope_rasters, compute_vertical_rmse,
     )
+
+    # Invalidate oversized unclipped legacy rasters (>1500 cells in either dimension)
+    if _BREACHED.exists():
+        try:
+            with rasterio.open(_BREACHED) as src:
+                if src.height > 1500 or src.width > 1500:
+                    logger.warning("[1] Found unclipped legacy DEM cache (>1500px); cleaning up to rebuild with BBOX clipping.")
+                    for p in [_DEM_UTM, _DEM_10M, _BREACHED, DEM_SLOPE_X, DEM_SLOPE_Y]:
+                        p.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # Generate synthetic if real tile not present
     if not DEM_RAW.exists():
@@ -48,9 +60,9 @@ def ensure_dem() -> Path:
     else:
         logger.info(f"Using real DEM tile: {DEM_RAW}")
 
-    # [56] Reproject to UTM 43N
+    # [56] Reproject to UTM 43N (clipped to BBOX_WGS84)
     if not _DEM_UTM.exists():
-        reproject_to_utm(DEM_RAW, _DEM_UTM)
+        reproject_to_utm(DEM_RAW, _DEM_UTM, bbox=BBOX_WGS84)
 
     # [46] Resample to 10m
     if not _DEM_10M.exists():

@@ -17,6 +17,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from app.config import BBOX_WGS84
+
 logger = logging.getLogger("urbanflow.terrain")
 
 # ---------------------------------------------------------------------------
@@ -146,8 +148,8 @@ def _generate_synthetic_landcover(
 # Core terrain processing pipeline
 # ---------------------------------------------------------------------------
 
-def reproject_to_utm(src_path: Path, dst_path: Path) -> None:
-    """[56] Reproject to EPSG:32643 (UTM 43N)."""
+def reproject_to_utm(src_path: Path, dst_path: Path, bbox=BBOX_WGS84) -> None:
+    """[56] Reproject to EPSG:32643 (UTM 43N) clipped to target bbox."""
     import rasterio
     from rasterio.crs import CRS
     from rasterio.enums import Resampling
@@ -155,8 +157,9 @@ def reproject_to_utm(src_path: Path, dst_path: Path) -> None:
 
     dst_crs = CRS.from_epsg(32643)
     with rasterio.open(src_path) as src:
+        bounds = bbox if bbox is not None else src.bounds
         transform, width, height = calculate_default_transform(
-            src.crs, dst_crs, src.width, src.height, *src.bounds
+            src.crs, dst_crs, src.width, src.height, *bounds
         )
         profile = src.profile.copy()
         profile.update(crs=dst_crs, transform=transform, width=width, height=height)
@@ -172,7 +175,7 @@ def reproject_to_utm(src_path: Path, dst_path: Path) -> None:
                     dst_crs=dst_crs,
                     resampling=Resampling.bilinear,   # [46]
                 )
-    logger.info(f"Reprojected {src_path.name} → {dst_path.name} (EPSG:32643)")
+    logger.info(f"Reprojected {src_path.name} → {dst_path.name} (EPSG:32643, bounds={bounds})")
 
 
 def resample_to_resolution(src_path: Path, dst_path: Path, res_m: float = 10.0) -> None:

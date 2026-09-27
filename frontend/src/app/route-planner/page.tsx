@@ -4,20 +4,30 @@ import dynamic from 'next/dynamic';
 import { useState, useCallback, useEffect } from 'react';
 import { useFloodStream } from '@/hooks/useFloodStream';
 import { useMapInteraction } from '@/hooks/useMapInteraction';
-import RouteResultCard from '@/components/panels/RouteResultCard';
 import { api } from '@/lib/api';
 import type { GeoJSONFeatureCollection } from '@/types/flood';
-import { Navigation, Map, BarChart2, Waves, MousePointer2, X, Shield } from 'lucide-react';
+import {
+  Navigation, Map, BarChart2, Waves, MousePointer2, X,
+  Shield, CheckCircle, AlertTriangle, TrendingDown, Clock,
+} from 'lucide-react';
 import Link from 'next/link';
 
 const FloodMap = dynamic(() => import('@/components/map/FloodMap'), { ssr: false });
 
+const VEHICLE_OPTIONS = [
+  { id: 'car',         label: 'Car',   icon: '🚗', desc: 'Passable up to 20cm' },
+  { id: 'suv',         label: 'SUV',   icon: '🚙', desc: 'Passable up to 35cm' },
+  { id: 'fire_tender', label: 'Fire',  icon: '🚒', desc: 'Emergency clearance' },
+  { id: 'bus',         label: 'Bus',   icon: '🚌', desc: 'Restricted routes' },
+];
+
 export default function RoutePlannerPage() {
   const { state: liveState, connected } = useFloodStream();
+  const [vehicleClass, setVehicleClass] = useState('car');
   const {
     routeState, hoveredNodeId,
     startRouteSelection, handleMapClick, clearRoute, setHoveredNodeId,
-  } = useMapInteraction();
+  } = useMapInteraction({ vehicleClass });
   const [networkGeoJSON, setNetworkGeoJSON] = useState<GeoJSONFeatureCollection | null>(null);
 
   useEffect(() => {
@@ -27,93 +37,299 @@ export default function RoutePlannerPage() {
   const routeResult = routeState.step === 'done' ? routeState.result : null;
 
   const hint =
-    routeState.step === 'idle'             ? 'Click "Plan Route" then click two points on the map' :
-    routeState.step === 'selecting_start'  ? 'Click to set START point' :
-    routeState.step === 'selecting_end'    ? 'Click to set END point' :
-    routeState.step === 'computing'        ? 'Computing safest route…' : null;
+    routeState.step === 'idle'            ? null :
+    routeState.step === 'selecting_start' ? 'Click to set START point' :
+    routeState.step === 'selecting_end'   ? 'Click to set END point' :
+    routeState.step === 'computing'       ? 'Computing safest route…' : null;
+
+  const formatDistance = (m: number) => m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 
   return (
-    <div className="h-screen flex flex-col bg-navy overflow-hidden">
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--navy)', color: 'var(--text)', overflow: 'hidden', fontFamily: '"Inter", system-ui, sans-serif' }}>
+
       {/* Top Bar */}
       <header className="top-bar">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <Waves className="w-5 h-5 text-accent" />
-          <span className="font-bold text-base tracking-tight">UrbanFlow</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{
+            width: 30, height: 30, borderRadius: 8,
+            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 0 12px rgba(59,130,246,0.4)',
+          }}>
+            <Waves size={15} color="#fff" />
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.2 }}>UrbanFlow</div>
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Anna Nagar · SIH 2026</div>
+          </div>
         </div>
-        <div className="w-px h-5 bg-surface-border mx-1" />
-        <Shield className="w-4 h-4 text-green-400" />
-        <span className="text-sm font-semibold text-white">Route Planner</span>
-        <span className={`ml-2 flex items-center gap-1 text-xs ${connected ? 'text-green-400' : 'text-muted'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-muted'}`} />
+
+        <div className="divider" />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Shield size={14} color="#22c55e" />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Route Planner</span>
+        </div>
+
+        <div className={`status-badge ${connected ? 'live' : 'offline'}`}>
+          <div className={`status-dot ${connected ? 'animate-pulse' : ''}`} />
           {connected ? 'Live flood data' : 'Disconnected'}
-        </span>
-        <div className="flex-1" />
-        <nav className="flex items-center gap-1">
-          <Link href="/" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-surface-card text-xs font-medium text-muted hover:text-white transition-colors">
-            <Map className="w-3.5 h-3.5" />Dashboard
-          </Link>
-          <Link href="/route-planner" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/10 border border-accent/20 text-xs font-medium text-accent">
-            <Navigation className="w-3.5 h-3.5" />Route Planner
-          </Link>
-          <Link href="/analytics" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-surface-card text-xs font-medium text-muted hover:text-white transition-colors">
-            <BarChart2 className="w-3.5 h-3.5" />Analytics
-          </Link>
+        </div>
+
+        <div style={{ flex: 1 }} />
+
+        <nav style={{ display: 'flex', gap: 2 }}>
+          <Link href="/" className="nav-link"><Map size={13} />Dashboard</Link>
+          <Link href="/route-planner" className="nav-link active"><Navigation size={13} />Route Planner</Link>
+          <Link href="/analytics" className="nav-link"><BarChart2 size={13} />Analytics</Link>
         </nav>
       </header>
 
-      <main className="flex-1 relative overflow-hidden">
-        <FloodMap
-          floodState={liveState}
-          networkGeoJSON={networkGeoJSON}
-          routeResult={routeResult}
-          routeState={routeState}
-          onMapClick={handleMapClick}
-          onNodeHover={(id) => setHoveredNodeId(id)}
-        />
+      <main style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+        {/* Full-screen map */}
+        <div style={{ flex: 1, position: 'relative' }}>
+          <FloodMap
+            floodState={liveState as any}
+            networkGeoJSON={networkGeoJSON}
+            routeResult={routeResult}
+            routeState={routeState}
+            onMapClick={handleMapClick}
+            onNodeHover={id => setHoveredNodeId(id)}
+          />
 
-        {/* Route controls */}
-        <div className="absolute top-3 left-3 z-10 flex flex-col gap-2">
-          {routeState.step === 'idle' ? (
-            <button
-              id="start-route-btn"
-              onClick={startRouteSelection}
-              className="flex items-center gap-2 px-4 py-2.5 bg-accent hover:bg-accent/80 rounded-xl
-                         text-sm font-semibold text-white transition-all shadow-lg shadow-accent/30"
-            >
-              <Navigation className="w-4 h-4" />
-              Plan Safe Route
-            </button>
-          ) : (
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-card/95 border border-accent/30 rounded-xl backdrop-blur-sm">
-              <MousePointer2 className="w-4 h-4 text-accent animate-pulse" />
-              <span className="text-sm text-accent font-medium">{hint}</span>
-              <button onClick={clearRoute} className="ml-2 text-muted hover:text-white">
-                <X className="w-4 h-4" />
+          {/* Top-left: Route control panel */}
+          <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 10, width: 280 }}>
+
+            {/* Vehicle selector */}
+            <div style={{
+              background: 'rgba(8,13,26,0.94)', border: '1px solid rgba(255,255,255,0.09)',
+              borderRadius: 14, backdropFilter: 'blur(20px)', padding: 14,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }} className="animate-slide-up">
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 10 }}>Vehicle Type</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                {VEHICLE_OPTIONS.map(v => (
+                  <button
+                    key={v.id}
+                    onClick={() => setVehicleClass(v.id)}
+                    title={v.desc}
+                    style={{
+                      padding: '8px 4px', borderRadius: 10,
+                      border: vehicleClass === v.id ? '1px solid rgba(59,130,246,0.45)' : '1px solid rgba(255,255,255,0.06)',
+                      background: vehicleClass === v.id ? 'rgba(59,130,246,0.18)' : 'rgba(255,255,255,0.04)',
+                      cursor: 'pointer', fontSize: 10,
+                      color: vehicleClass === v.id ? '#93c5fd' : 'rgba(255,255,255,0.4)',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <span style={{ fontSize: 16 }}>{v.icon}</span>
+                    <span style={{ fontWeight: 500 }}>{v.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Plan button / status */}
+            {routeState.step === 'idle' ? (
+              <button
+                id="start-route-btn"
+                onClick={startRouteSelection}
+                style={{
+                  padding: '12px 18px', borderRadius: 12, border: 'none', cursor: 'pointer',
+                  background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                  color: '#fff', fontSize: 13, fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  boxShadow: '0 0 30px rgba(59,130,246,0.35), 0 4px 16px rgba(0,0,0,0.3)',
+                  transition: 'all 0.2s ease',
+                }}
+                className="animate-slide-up"
+              >
+                <Navigation size={15} />
+                Plan Flood-Safe Route
               </button>
+            ) : hint && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '12px 16px', borderRadius: 12,
+                background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)',
+                backdropFilter: 'blur(16px)',
+              }} className="animate-slide-up">
+                <MousePointer2 size={14} color="#93c5fd" style={{ animation: 'pulse 2s infinite', flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12, color: '#93c5fd', fontWeight: 500 }}>{hint}</span>
+                <button
+                  onClick={clearRoute}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', padding: 2 }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Route result card — top right */}
+          {routeResult && (
+            <div style={{
+              position: 'absolute', top: 16, right: 16, zIndex: 10, width: 300,
+            }} className="animate-slide-right">
+              <div style={{
+                background: 'rgba(8,13,26,0.96)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 16, backdropFilter: 'blur(24px)',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+                overflow: 'hidden',
+              }}>
+                {/* Header */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)',
+                  background: 'rgba(34,197,94,0.06)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CheckCircle size={15} color="#22c55e" />
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>Route Comparison</span>
+                  </div>
+                  <button
+                    onClick={clearRoute}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', padding: 4 }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <div style={{ padding: 14 }}>
+                  {/* Safe route */}
+                  <div style={{
+                    padding: '10px 12px', borderRadius: 10, marginBottom: 8,
+                    background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                      <div style={{ width: 16, height: 3, background: '#22c55e', borderRadius: 2 }} />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#4ade80' }}>Flood-Safe Route</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 20, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: '#fff', lineHeight: 1 }}>
+                          {routeResult.safe_route.max_depth_cm.toFixed(1)}<span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>cm</span>
+                        </div>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>max depth</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 20, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: '#fff', lineHeight: 1 }}>
+                          {formatDistance(routeResult.safe_route.distance_m)}
+                        </div>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', marginTop: 2 }}>distance</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Naive route */}
+                  <div style={{
+                    padding: '10px 12px', borderRadius: 10, marginBottom: 12,
+                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                      <div style={{ width: 16, height: 2, borderTop: '2px dashed #94a3b8', background: 'none' }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.4)' }}>Naive Shortest Route</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 20, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>
+                          {routeResult.naive_route.max_depth_cm.toFixed(1)}<span style={{ fontSize: 11 }}>cm</span>
+                        </div>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>max depth</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 20, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: 'rgba(255,255,255,0.4)', lineHeight: 1 }}>
+                          {formatDistance(routeResult.naive_route.distance_m)}
+                        </div>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>distance</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Comparison stats */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: routeResult.comparison.max_depth_avoided_cm > 0 ? 10 : 0 }}>
+                    {[
+                      {
+                        icon: <Clock size={12} />,
+                        value: routeResult.comparison.distance_saved_m > 0
+                          ? `-${formatDistance(routeResult.comparison.distance_saved_m)}`
+                          : `+${formatDistance(Math.abs(routeResult.comparison.distance_saved_m))}`,
+                        label: 'detour',
+                        color: routeResult.comparison.distance_saved_m > 0 ? '#f87171' : 'rgba(255,255,255,0.6)',
+                      },
+                      {
+                        icon: <AlertTriangle size={12} />,
+                        value: `${routeResult.comparison.max_depth_avoided_cm.toFixed(1)}cm`,
+                        label: 'avoided',
+                        color: routeResult.comparison.max_depth_avoided_cm > 0 ? '#f87171' : 'rgba(255,255,255,0.6)',
+                      },
+                      {
+                        icon: <TrendingDown size={12} />,
+                        value: `${routeResult.comparison.safe_weight_ratio.toFixed(2)}x`,
+                        label: 'safety',
+                        color: '#fb923c',
+                      },
+                    ].map((stat, i) => (
+                      <div key={i} style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                        padding: '8px 6px', borderRadius: 8,
+                        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
+                      }}>
+                        <div style={{ color: stat.color }}>{stat.icon}</div>
+                        <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: stat.color }}>{stat.value}</span>
+                        <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{stat.label}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {routeResult.comparison.max_depth_avoided_cm > 0 && (
+                    <div style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 8,
+                      padding: '8px 10px', borderRadius: 8,
+                      background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+                    }}>
+                      <Shield size={12} color="#fbbf24" style={{ flexShrink: 0, marginTop: 1 }} />
+                      <p style={{ fontSize: 11, color: '#fcd34d', margin: 0, lineHeight: 1.5 }}>
+                        Safe route avoids up to {routeResult.comparison.max_depth_avoided_cm.toFixed(1)}cm deeper floodwater.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Bottom-center: instruction card when idle */}
+          {!routeResult && routeState.step === 'idle' && (
+            <div style={{ position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)', zIndex: 10 }} className="animate-slide-up">
+              <div style={{
+                padding: '20px 28px', borderRadius: 16, textAlign: 'center', maxWidth: 340,
+                background: 'rgba(8,13,26,0.94)', border: '1px solid rgba(255,255,255,0.09)',
+                backdropFilter: 'blur(20px)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+              }}>
+                <div style={{
+                  width: 44, height: 44, borderRadius: 12, margin: '0 auto 12px',
+                  background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Shield size={22} color="#22c55e" />
+                </div>
+                <h2 style={{ fontSize: 14, fontWeight: 700, marginBottom: 6, color: '#fff' }}>Flood-Safe Route Planner</h2>
+                <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, marginBottom: 14 }}>
+                  Select your vehicle type, then click <strong style={{ color: 'rgba(255,255,255,0.7)' }}>&quot;Plan Flood-Safe Route&quot;</strong> and pick two points on the map.
+                </p>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>
+                  <span>🗺️ Real-time flood data</span>
+                  <span>·</span>
+                  <span>⚡ AI-powered routing</span>
+                  <span>·</span>
+                  <span>🛡️ Risk-aware paths</span>
+                </div>
+              </div>
             </div>
           )}
         </div>
-
-        {/* Route result */}
-        {routeResult && (
-          <div className="absolute top-3 right-3 z-10">
-            <RouteResultCard result={routeResult} onClear={clearRoute} />
-          </div>
-        )}
-
-        {/* Instruction overlay */}
-        {!routeResult && routeState.step === 'idle' && (
-          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10">
-            <div className="glass-card px-6 py-4 text-center max-w-sm">
-              <Shield className="w-8 h-8 text-green-400 mx-auto mb-2" />
-              <h2 className="text-sm font-semibold text-white mb-1">Flood-Safe Route Planner</h2>
-              <p className="text-xs text-muted">
-                Click &ldquo;Plan Safe Route&rdquo; then select start and end points on the Chennai map.
-                The system will compute a route that avoids flooded streets.
-              </p>
-            </div>
-          </div>
-        )}
       </main>
     </div>
   );

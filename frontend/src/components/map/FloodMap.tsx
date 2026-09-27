@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { GeoJSONCollection, FloodNodePoint, RouteResult } from '@/lib/api';
+import type { GeoJSONFeatureCollection, RouteResult, FloodState, RouteSelectionState } from '@/types/flood';
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const ANNA_NAGAR_CENTER: [number, number] = [80.21, 13.10];
@@ -27,20 +27,13 @@ const DEPTH_WIDTH_EXPR = [
 ] as unknown as maplibregl.ExpressionSpecification;
 
 interface FloodMapProps {
-  networkGeoJSON: GeoJSONCollection | null;
-  floodState?: any;
-  routeResult: any;
+  networkGeoJSON: GeoJSONFeatureCollection | null;
+  floodState?: FloodState | null;
+  routeResult: RouteResult | null;
   routeState: RouteSelectionState;
   onMapClick: (lat: number, lon: number) => void;
   onNodeHover: (nodeId: string | null) => void;
 }
-
-export type RouteSelectionState =
-  | { step: 'idle' }
-  | { step: 'selecting_start' }
-  | { step: 'selecting_end'; start: { lat: number; lon: number } }
-  | { step: 'computing'; start: { lat: number; lon: number }; end: { lat: number; lon: number } }
-  | { step: 'done'; start: { lat: number; lon: number }; end: { lat: number; lon: number }; result: any };
 
 export default function FloodMap({
   networkGeoJSON,
@@ -76,6 +69,93 @@ export default function FloodMap({
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 
     map.on('load', () => {
+      // Flood zones raster / grid source
+      map.addSource('flood-zones', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+      // 1. Flood Heatmap Layer (smooth regional danger gradient)
+      map.addLayer({
+        id: 'flood-heat',
+        type: 'heatmap',
+        source: 'flood-zones',
+        paint: {
+          'heatmap-weight': [
+            'interpolate', ['linear'], ['get', 'depth_cm'],
+            0, 0,
+            5, 0.3,
+            15, 0.7,
+            30, 1.0,
+          ],
+          'heatmap-intensity': 1.4,
+          'heatmap-color': [
+            'interpolate', ['linear'], ['heatmap-density'],
+            0, 'rgba(0,0,0,0)',
+            0.15, 'rgba(245,158,11,0.25)',  // amber
+            0.4,  'rgba(245,158,11,0.65)',  // caution orange
+            0.7,  'rgba(249,115,22,0.85)',  // critical deep orange
+            0.9,  'rgba(239,68,68,0.95)',   // impassable bright red
+            1.0,  'rgba(185,28,28,1.0)',     // severe crimson
+          ],
+          'heatmap-radius': 32,
+          'heatmap-opacity': 0.75,
+        },
+      });
+
+      // 2. Flood Risk Circles (discrete localized flood nodes)
+      map.addLayer({
+        id: 'flood-circles',
+        type: 'circle',
+        source: 'flood-zones',
+        filter: ['>', ['get', 'depth_cm'], 2.0],
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'depth_cm'],
+            2, 4,
+            15, 7,
+            30, 12,
+            60, 18,
+          ],
+          'circle-color': [
+            'match', ['get', 'risk'],
+            'caution',    '#f59e0b',
+            'critical',   '#f97316',
+            'impassable', '#ef4444',
+            '#f59e0b',
+          ],
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-opacity': 0.7,
+        },
+      });
+
+      // 3. Flood Hotspots Source & Ring Layer
+      map.addSource('flood-hotspots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({
+        id: 'hotspot-pulse',
+        type: 'circle',
+        source: 'flood-hotspots',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'max_depth_cm'],
+            10, 20,
+            30, 32,
+            60, 48,
+          ],
+          'circle-color': [
+            'match', ['get', 'severity'],
+            'critical', 'rgba(239,68,68,0.22)',
+            'rgba(245,158,11,0.22)',
+          ],
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': [
+            'match', ['get', 'severity'],
+            'critical', '#ef4444',
+            '#f59e0b',
+          ],
+          'circle-stroke-opacity': 0.95,
+        },
+      });
+
       // Network edges layer
       map.addSource('network', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({
@@ -138,6 +218,42 @@ export default function FloodMap({
 
     return () => { map.remove(); mapRef.current = null; };
   }, []);
+
+  // ── Update flood state overlay (red/orange zones & hotspots) ─────────────
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+
+    // Update flood zones source
+    const floodSource = map.getSource('flood-zones') as maplibregl.GeoJSONSource;
+    if (floodSource && (floodState as any)?.nodes) {
+      const nodes = (floodState as any).nodes as { lat: number; lon: number; depth_cm: number; risk: string; color: string }[];
+      const features = nodes.map(n => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [n.lon, n.lat] },
+        properties: {
+          depth_cm: n.depth_cm,
+          risk: n.risk,
+          color: n.color,
+        },
+      }));
+      floodSource.setData({ type: 'FeatureCollection', features });
+    }
+
+    // Update hotspots source
+    const hotspotSource = map.getSource('flood-hotspots') as maplibregl.GeoJSONSource;
+    if (hotspotSource && (floodState as any)?.hotspots) {
+      const hotspots = (floodState as any).hotspots as any[];
+      const features = hotspots
+        .filter(h => h.lon !== undefined && h.lat !== undefined)
+        .map(h => ({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [h.lon, h.lat] },
+          properties: { ...h },
+        }));
+      hotspotSource.setData({ type: 'FeatureCollection', features });
+    }
+  }, [mapReady, floodState]);
 
   // ── Update network GeoJSON ─────────────────────────────────────────────
   useEffect(() => {

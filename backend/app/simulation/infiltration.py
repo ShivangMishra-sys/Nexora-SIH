@@ -162,10 +162,13 @@ def compute_infiltration_raster(
         if model == "horton":
             f_rate = horton_infiltration(f0, fc, k, elapsed_hr, amc_class)
         else:  # green-ampt
-            cum_f = float(np.mean(rain_rate[mask])) * elapsed_hr
+            # Fast approximation: mean rain rate across entire grid instead of masking
+            mean_rain = float(np.mean(rain_rate))
+            cum_f = mean_rain * elapsed_hr
             f_rate, _ = green_ampt_infiltration(Ks, psi, theta_e, cum_f + 0.1, elapsed_hr / max(1, int(elapsed_hr * 12)))
 
-        infiltration[mask] = min(f_rate, float(np.mean(rain_rate[mask])))
+        # Fast assignment without double indexing
+        infiltration[mask] = min(f_rate, float(np.mean(rain_rate)))
 
     # Net runoff = rain - infiltration (clamp to 0)
     return np.maximum(0.0, rain_rate - infiltration).astype(np.float32)

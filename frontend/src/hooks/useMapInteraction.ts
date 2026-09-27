@@ -2,7 +2,11 @@
 
 import { useState, useCallback } from 'react';
 import { api } from '@/lib/api';
-import type { MapPin, RouteResult, RouteSelectionState } from '@/types/flood';
+import type { MapPin, RouteSelectionState } from '@/types/flood';
+
+interface UseMapInteractionOptions {
+  vehicleClass?: string;
+}
 
 interface UseMapInteractionResult {
   routeState: RouteSelectionState;
@@ -19,7 +23,7 @@ interface UseMapInteractionResult {
  * Route selection flow:
  *   idle → selecting_start → [click] → selecting_end → [click] → computing → done
  */
-export function useMapInteraction(): UseMapInteractionResult {
+export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOptions = {}): UseMapInteractionResult {
   const [routeState, setRouteState] = useState<RouteSelectionState>({ step: 'idle' });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
@@ -39,6 +43,7 @@ export function useMapInteraction(): UseMapInteractionResult {
           const result = await api.computeRoute(
             [start.lat, start.lon],
             [lat, lon],
+            vehicleClass,
           );
           setRouteState({ step: 'done', start, end: { lat, lon }, result });
         } catch (e) {
@@ -47,7 +52,7 @@ export function useMapInteraction(): UseMapInteractionResult {
         }
       }
     },
-    [routeState],
+    [routeState, vehicleClass],
   );
 
   const clearRoute = useCallback(() => {

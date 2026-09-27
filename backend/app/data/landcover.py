@@ -112,7 +112,8 @@ def refine_c_raster_with_osm_landuse(
         from rasterio.features import rasterize
 
         tags = {"landuse": True, "leisure": ["park", "garden", "recreation_ground"]}
-        gdf: gpd.GeoDataFrame = ox.features_from_bbox(*bbox, tags=tags)
+        # OSMnx 1.9+ expects bbox=(north, south, east, west)
+        gdf: gpd.GeoDataFrame = ox.features_from_bbox(bbox=(bbox[3], bbox[1], bbox[2], bbox[0]), tags=tags)
         if gdf.empty:
             return c_raster
 
@@ -151,7 +152,8 @@ def get_building_footprints(bbox: Tuple[float, float, float, float]):
         import geopandas as gpd
 
         tags = {"building": True}
-        gdf: gpd.GeoDataFrame = ox.features_from_bbox(*bbox, tags=tags)
+        # OSMnx 1.9+ expects bbox=(north, south, east, west)
+        gdf: gpd.GeoDataFrame = ox.features_from_bbox(bbox=(bbox[3], bbox[1], bbox[2], bbox[0]), tags=tags)
         logger.info(f"[7] Fetched {len(gdf)} building footprints from OSM")
         return gdf
     except Exception as e:

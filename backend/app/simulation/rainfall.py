@@ -282,6 +282,14 @@ class RainfallSystem:
             "radius_px": max(5, self.grid_shape[0] // 4),
         }
         logger.info(f"[11] RainfallSystem ready — grid {self.grid_shape}, bbox {bbox}")
+        # Seed initial frames so nowcast is available immediately on startup
+        for t_seed in range(-3, 1):
+            seed_z = synthetic_reflectivity_frame(
+                self.grid_shape, self._storm_params["center"],
+                self._storm_params["intensity_dbz"],
+                self._storm_params["radius_px"], t=t_seed,
+            )
+            self.nowcast_engine.push_frame(seed_z)
 
     def set_storm(self, intensity_dbz: float, center=(0.5, 0.5), radius_fraction=0.25):
         self._storm_params = {
@@ -289,6 +297,12 @@ class RainfallSystem:
             "intensity_dbz": intensity_dbz,
             "radius_px": max(5, int(self.grid_shape[0] * radius_fraction)),
         }
+        # Push updated frame for new storm parameters
+        Z_dbz = synthetic_reflectivity_frame(
+            self.grid_shape, center, intensity_dbz,
+            self._storm_params["radius_px"], t=self._t,
+        )
+        self.nowcast_engine.push_frame(Z_dbz)
 
     def tick(self, dt_minutes: float = 5.0) -> dict:
         """Advance one timestep: generate frame, run Z→R, push to nowcast."""
@@ -324,6 +338,13 @@ class RainfallSystem:
             if forecast_rain is not None and steps <= len(forecast_rain):
                 result[h] = forecast_rain[steps - 1]
             else:
-                # Fallback: use current rain rate
-                result[h] = self.tracker.cumulative_rain_mm() / max(1, h / 60.0)
+                # Robust fallback: model storm decay over horizon
+                decay = float(np.exp(-h / 90.0))
+                peak_r = float(dbz_to_rain_rate(np.array(self._storm_params["intensity_dbz"])))
+                grid = synthetic_reflectivity_frame(
+                    self.grid_shape, self._storm_params["center"],
+                    self._storm_params["intensity_dbz"] * decay,
+                    self._storm_params["radius_px"], t=int(h / 5),
+                )
+                result[h] = dbz_to_rain_rate(grid)
         return result

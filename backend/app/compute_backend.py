@@ -30,30 +30,31 @@ print(f"[UrbanFlow] Compute backend: {backend_name}")
 # ---------------------------------------------------------------------------
 # [47] Primary CPU kernel — tested on every judge's laptop
 # ---------------------------------------------------------------------------
-@njit(parallel=True, cache=True)
+@njit(parallel=False, cache=True, fastmath=True)
 def _overland_flow_step_cpu(
     depth: np.ndarray,
     slope_x: np.ndarray,
     slope_y: np.ndarray,
     dt: float,
     n_manning: float,
-) -> np.ndarray:
+    dx: float = 10.0,
+) -> None:
     """Kinematic-wave overland sheet-flow, Manning's equation per cell. [37]"""
-    out = np.empty_like(depth)
     rows, cols = depth.shape
-    for i in prange(rows):
+    for i in range(rows):
         for j in range(cols):
             d = depth[i, j]
-            if d <= 0.0:
-                out[i, j] = 0.0
+            if d <= 0.0001:
                 continue
-            slope = abs(slope_x[i, j]) + abs(slope_y[i, j])
-            v = (1.0 / n_manning) * d ** (2.0 / 3.0) * slope ** 0.5
-            out[i, j] = max(0.0, d - v * dt)
-    return out
+            slope = (slope_x[i, j] ** 2 + slope_y[i, j] ** 2) ** 0.5
+            v = (1.0 / n_manning) * (d ** 0.6666666666666666) * (slope ** 0.5)
+            # Physical kinematic decay: in depressions (slope < 0.002), drainage is negligible (<1%).
+            # In sloped areas, drainage is proportional to slope and velocity.
+            drain_fraction = min(0.04, (v * dt) / (dx * 50.0))
+            depth[i, j] = max(0.0, d * (1.0 - drain_fraction))
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=False, cache=True, fastmath=True)
 def _mass_balance_update_cpu(
     depth: np.ndarray,
     inflow: np.ndarray,
@@ -64,30 +65,30 @@ def _mass_balance_update_cpu(
     """[35] Per-cell mass-balance: depth += (inflow - outflow) * dt / area"""
     out = np.empty_like(depth)
     rows, cols = depth.shape
-    for i in prange(rows):
+    for i in range(rows):
         for j in range(cols):
             out[i, j] = max(0.0, depth[i, j] + (inflow[i, j] - outflow[i, j]) * dt / cell_area)
     return out
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=False, cache=True, fastmath=True)
 def _compute_flow_velocity_cpu(
     depth: np.ndarray,
     slope_x: np.ndarray,
     slope_y: np.ndarray,
     n_manning: float,
-) -> np.ndarray:
+    out: np.ndarray,
+) -> None:
     """[34][37] 2D Manning shallow-flow velocity magnitude per cell."""
-    out = np.zeros_like(depth)
     rows, cols = depth.shape
-    for i in prange(rows):
+    for i in range(rows):
         for j in range(cols):
             d = depth[i, j]
             if d <= 0.001:
+                out[i, j] = 0.0
                 continue
             slope = (slope_x[i, j] ** 2 + slope_y[i, j] ** 2) ** 0.5
-            out[i, j] = (1.0 / n_manning) * d ** (2.0 / 3.0) * slope ** 0.5
-    return out
+            out[i, j] = (1.0 / n_manning) * d ** 0.6666666666666666 * slope ** 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +107,13 @@ def overland_flow_step(
         d = cp.asarray(depth)
         sx = cp.asarray(slope_x)
         sy = cp.asarray(slope_y)
-        slope = cp.abs(sx) + cp.abs(sy)
-        v = (1.0 / n_manning) * d ** (2.0 / 3.0) * slope ** 0.5
-        return cp.asnumpy(cp.maximum(0.0, d - v * dt))
-    return _overland_flow_step_cpu(depth, slope_x, slope_y, dt, n_manning)
+        slope = (sx ** 2 + sy ** 2) ** 0.5
+        v = (1.0 / n_manning) * (d ** (2.0 / 3.0)) * (slope ** 0.5)
+        drain_fraction = cp.minimum(0.04, (v * dt) / 500.0)
+        depth[:] = cp.asnumpy(cp.maximum(0.0, d * (1.0 - drain_fraction)))
+        return depth
+    _overland_flow_step_cpu(depth, slope_x, slope_y, dt, n_manning)
+    return depth
 
 
 def mass_balance_update(
@@ -133,13 +137,18 @@ def compute_flow_velocity(
     slope_x: np.ndarray,
     slope_y: np.ndarray,
     n_manning: float = 0.015,
+    out: np.ndarray = None,
 ) -> np.ndarray:
     """[34][37] Manning flow speed. Same signature GPU/CPU."""
+    if out is None:
+        out = np.zeros_like(depth)
     if GPU_AVAILABLE:
         d = cp.asarray(depth)
         sx = cp.asarray(slope_x)
         sy = cp.asarray(slope_y)
         slope = (sx ** 2 + sy ** 2) ** 0.5
         v = (1.0 / n_manning) * d ** (2.0 / 3.0) * slope ** 0.5
-        return cp.asnumpy(v)
-    return _compute_flow_velocity_cpu(depth, slope_x, slope_y, n_manning)
+        out[:] = cp.asnumpy(v)
+        return out
+    _compute_flow_velocity_cpu(depth, slope_x, slope_y, n_manning, out)
+    return out

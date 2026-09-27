@@ -73,7 +73,20 @@ def add_elevations_from_dem(G: nx.MultiDiGraph, dem_path: Path = DEM_BREACHED) -
                 data.setdefault("elevation", 5.0)
             return G
 
-        G = ox.elevation.add_node_elevations_raster(G, raster_path=str(dem_path))
+        # Use rasterio directly to avoid osmnx's gdal dependency on Windows
+        with rasterio.open(str(dem_path)) as src:
+            for node, data in G.nodes(data=True):
+                x, y = data.get('x'), data.get('y')
+                if x is not None and y is not None:
+                    try:
+                        val = list(src.sample([(x, y)]))[0][0]
+                        data["elevation"] = float(val)
+                    except Exception:
+                        data.setdefault("elevation", 5.0)
+                else:
+                    data.setdefault("elevation", 5.0)
+                    
+        # Add edge grades since we set node elevations
         G = ox.elevation.add_edge_grades(G, add_absolute=True)
         logger.info("[9] Node elevations sampled from hydro-enforced DEM")
     except Exception as e:
@@ -152,7 +165,7 @@ def get_water_bodies(bbox: Tuple[float, float, float, float]):
     try:
         import osmnx as ox
         tags = {"natural": "water", "waterway": ["riverbank", "river", "stream"]}
-        gdf = ox.features_from_bbox(*bbox, tags=tags)
+        gdf = ox.features_from_bbox(bbox=(bbox[3], bbox[1], bbox[2], bbox[0]), tags=tags)
         logger.info(f"[40] {len(gdf)} water body features fetched from OSM")
         return gdf
     except Exception as e:
@@ -173,7 +186,7 @@ def get_critical_infrastructure(bbox: Tuple[float, float, float, float]):
             "railway": "station",
             "power": "substation",
         }
-        gdf = ox.features_from_bbox(*bbox, tags=tags)
+        gdf = ox.features_from_bbox(bbox=(bbox[3], bbox[1], bbox[2], bbox[0]), tags=tags)
         logger.info(f"[63] {len(gdf)} critical infrastructure POIs fetched")
         return gdf
     except Exception as e:
