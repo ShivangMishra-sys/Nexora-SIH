@@ -198,8 +198,8 @@ _ws_clients: List[WebSocket] = []
 class ScenarioRunRequest(BaseModel):
     scenario: str = "cloudburst_extreme"
     intensity_dbz: float = 50.0
-    storm_center: List[float] = [0.5, 0.5]
-    radius_fraction: float = 0.25
+    storm_center: List[float] = [0.48, 0.66]
+    radius_fraction: float = 0.32
     drain_blockage_pct: float = 0.0    # [72] what-if slider
 
 class RouteRequest(BaseModel):
@@ -241,6 +241,9 @@ def _build_ws_message(result: Dict, ctx: Dict) -> str:
     counts = np.bincount(risk_grid.ravel(), minlength=4)
     total_cells = max(1, risk_grid.size)
     validation = result.get("validation", {"rmse_cm": 3.4, "f1_flood_detection": 0.92})
+    util_pct = float(result.get("drainage_util_pct", 0.0))
+    if util_pct <= 0.0:
+        util_pct = round(min(100.0, float(counts[3] + counts[2]) / total_cells * 100 * 8), 1)
 
     summary = {
         "max_depth_cm": round(float(depth_cm.max()), 1),
@@ -254,7 +257,7 @@ def _build_ws_message(result: Dict, ctx: Dict) -> str:
         "caution_pct": round(float(counts[1] / total_cells * 100), 1),
         "critical_pct": round(float(counts[2] / total_cells * 100), 1),
         "impassable_pct": round(float(counts[3] / total_cells * 100), 1),
-        "drainage_util_pct": round(min(100.0, float(counts[3] + counts[2]) / total_cells * 100 * 8), 1),
+        "drainage_util_pct": util_pct,
         "hotspots": result.get("hotspots", []),
         "validation": validation,
     }
@@ -375,8 +378,8 @@ def get_scenario_status():
                     "t_minutes": int(t_min),
                     "mean_mm_hr": mean_val,
                     "max_mm_hr": max_val,
-                    "storm_lat": 13.10,
-                    "storm_lon": 80.21,
+                    "storm_lat": 13.089,
+                    "storm_lon": 80.208,
                 })
 
     return {
@@ -427,6 +430,10 @@ def _reset_simulation(
         coupled.surface.velocity.fill(0.0)
         coupled.surface.surcharge_input.fill(0.0)
         coupled.risk_grid.fill(0)
+
+    swmm = ctx.get("swmm_runner")
+    if swmm and hasattr(swmm, "reset"):
+        swmm.reset()
 
     if tracker:
         tracker._record.clear()
@@ -484,8 +491,8 @@ async def resume_scenario():
         coupled = ctx.get("coupled")
         if coupled and coupled.t_minutes >= 180.0:
             rainfall = ctx.get("rainfall")
-            p = rainfall._storm_params if rainfall else {"intensity_dbz": 50.0, "center": (0.45, 0.55), "radius_px": 50}
-            rad_frac = p["radius_px"] / max(1, coupled.grid_shape[0]) if coupled else 0.25
+            p = rainfall._storm_params if rainfall else {"intensity_dbz": 50.0, "center": (0.48, 0.66), "radius_px": 50}
+            rad_frac = p["radius_px"] / max(1, coupled.grid_shape[0]) if coupled else 0.32
             initial_state = _reset_simulation(
                 ctx, ctx.get("scenario_active", "cloudburst_extreme"),
                 p["intensity_dbz"], p["center"], rad_frac
@@ -504,7 +511,7 @@ async def run_scenario(req: ScenarioRunRequest, background: BackgroundTasks):
     if ctx is None:
         raise HTTPException(503, "Simulation not initialized")
 
-    center = tuple(req.storm_center) if req.storm_center else (0.45, 0.55)
+    center = tuple(req.storm_center) if req.storm_center else (0.48, 0.66)
     initial_state = _reset_simulation(
         ctx, req.scenario, req.intensity_dbz, center, req.radius_fraction
     )
@@ -678,6 +685,9 @@ def _serialize_state(state: Dict) -> Dict:
         total_cells = max(1, risk_grid.size)
         result["severe_count"] = int(counts[3])
         result["critical_count"] = int(counts[2])
+        util_pct = float(state.get("drainage_util_pct", 0.0))
+        if util_pct <= 0.0:
+            util_pct = round(min(100.0, float(counts[3] + counts[2]) / total_cells * 100 * 8), 1)
         result["summary"] = {
             "max_depth_cm": result["max_depth_cm"],
             "mean_depth_cm": result["mean_depth_cm"],
@@ -690,6 +700,7 @@ def _serialize_state(state: Dict) -> Dict:
             "caution_pct": round(float(counts[1] / total_cells * 100), 1),
             "critical_pct": round(float(counts[2] / total_cells * 100), 1),
             "impassable_pct": round(float(counts[3] / total_cells * 100), 1),
+            "drainage_util_pct": util_pct,
         }
         # Ensure hotspots have geographic coordinates
         rows, cols = depth_cm.shape
@@ -741,6 +752,9 @@ def get_flood_summary():
     risk_grid = state.get("risk_grid", np.zeros_like(depth_cm, dtype=np.uint8))
     counts = np.bincount(risk_grid.ravel(), minlength=4)
     total = max(1, risk_grid.size)
+    util_pct = float(state.get("drainage_util_pct", 0.0))
+    if util_pct <= 0.0:
+        util_pct = round(min(100.0, float(counts[3] + counts[2]) / total * 100 * 8), 1)
     return {
         "max_depth_cm": round(float(depth_cm.max()), 1),
         "mean_depth_cm": round(float(depth_cm.mean()), 1),
@@ -753,7 +767,7 @@ def get_flood_summary():
         "disruptive_count": int(counts[2]),
         "nuisance_count": int(counts[1]),
         "dry_count": int(counts[0]),
-        "drainage_util_pct": round(min(100.0, float(counts[3] + counts[2]) / total * 100 * 8), 1),
+        "drainage_util_pct": util_pct,
         "hotspots": state.get("hotspots", []),
         "validation": validation,
     }

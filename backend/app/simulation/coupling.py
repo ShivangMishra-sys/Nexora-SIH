@@ -337,7 +337,7 @@ class CoupledSimulation:
         logger.info("Tick Step 3: SWMM step")
         try:
             self.swmm.inject_inflow(node_inflow_m3s)
-            surcharge = self.swmm.step()   # returns {node_id: depth_m}
+            surcharge = self.swmm.step(node_inflow_m3s)   # returns {node_id: depth_m}
         except Exception as e:
             logger.warning(f"SWMM step failed ({e}); continuing with empty surcharge")
             surcharge = {}
@@ -350,12 +350,12 @@ class CoupledSimulation:
             if node_id in self.node_grid_map:
                 r, c = self.node_grid_map[node_id]
                 if 0 <= r < self.grid_shape[0] and 0 <= c < self.grid_shape[1]:
-                    # Distribute surcharge volume to adjacent cells
-                    for dr in range(-1, 2):
-                        for dc in range(-1, 2):
-                            nr, nc = r + dr, c + dc
-                            if 0 <= nr < self.grid_shape[0] and 0 <= nc < self.grid_shape[1]:
-                                surcharge_grid[nr, nc] += depth_m / 9.0
+                    # Distribute manhole overflow directly to road intersection cell and immediate neighbors
+                    surcharge_grid[r, c] += depth_m * 0.6
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < self.grid_shape[0] and 0 <= nc < self.grid_shape[1]:
+                            surcharge_grid[nr, nc] += depth_m * 0.1
 
         # Step 5: classify + cluster
         logger.info("Tick Step 5: Classify risk")
@@ -374,13 +374,14 @@ class CoupledSimulation:
         self.t_minutes = int(self.t_steps * self.dt_s / 60)
 
         state = {
-            "t_minutes":      self.t_minutes,
-            "depth_cm":       depth_cm,
-            "risk_grid":      self.risk_grid,
-            "velocity":       surface_result["velocity_m_s"],
-            "hotspots":       hotspots,
-            "surcharge_nodes": list(surcharge.keys()),
-            "validation":     validation,
+            "t_minutes":         self.t_minutes,
+            "depth_cm":          depth_cm,
+            "risk_grid":         self.risk_grid,
+            "velocity":          surface_result["velocity_m_s"],
+            "hotspots":          hotspots,
+            "surcharge_nodes":    list(surcharge.keys()),
+            "drainage_util_pct": getattr(self.swmm, "drainage_util_pct", 0.0),
+            "validation":        validation,
         }
 
         self._notify(state)

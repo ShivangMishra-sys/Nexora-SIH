@@ -204,8 +204,8 @@ class SurfaceRunoffModel:
         np.multiply(effective_c, net_rain_mm_hr, out=self.depth_increment)
         self.depth_increment *= (dt_hr / 1000.0)
 
-        # [39] Add SWMM surcharge
-        self.depth_increment += (self.surcharge_input * dt_hr)
+        # [39] Add SWMM surcharge (meters of water surcharged directly from full conduits)
+        self.depth_increment += self.surcharge_input
 
         # [35] Accumulate depth
         self.depth_m += self.depth_increment
@@ -237,13 +237,21 @@ class SurfaceRunoffModel:
     def extract_inflow_to_swmm(self, node_grid_map: dict) -> dict:
         """
         [38] Extract per-node surface inflow volume (m³/tick) for SWMM.
-        node_grid_map: {node_id: (row, col)} from spatial join [24].
+        Street catch-basins intercept standing runoff into the drainage network,
+        actively draining roads while conduits have capacity.
         """
         node_inflow = {}
         for node_id, (r, c) in node_grid_map.items():
             if 0 <= r < self.grid_shape[0] and 0 <= c < self.grid_shape[1]:
-                # Volume = depth * cell_area (m³), treat as runoff into manhole
-                node_inflow[node_id] = float(self.depth_m[r, c] * self.cell_area * 0.1)
+                d = float(self.depth_m[r, c])
+                if d > 0.002:  # > 2mm standing water
+                    # Inlets intercept up to 35% of standing water per tick, max 4cm (40 L/s over 100m2)
+                    capture_depth = min(d * 0.35, 0.04)
+                    vol = float(capture_depth * self.cell_area)
+                    self.depth_m[r, c] -= capture_depth
+                    node_inflow[node_id] = vol
+                else:
+                    node_inflow[node_id] = 0.0
         return node_inflow
 
     def get_depth_cm(self) -> np.ndarray:

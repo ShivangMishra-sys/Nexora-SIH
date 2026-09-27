@@ -126,8 +126,8 @@ export default function DashboardPage() {
           await api.runScenario({
             scenario: activeScenario,
             intensity_dbz: sc?.dbz ?? 50,
-            storm_center: [0.45, 0.55],
-            radius_fraction: 0.25,
+            storm_center: [0.48, 0.66],
+            radius_fraction: 0.32,
             drain_blockage_pct: blockagePct,
           });
           setTimelineT(0);
@@ -157,8 +157,8 @@ export default function DashboardPage() {
       const res = await api.runScenario({
         scenario: id,
         intensity_dbz: dbz,
-        storm_center: [0.45, 0.55],
-        radius_fraction: 0.25,
+        storm_center: [0.48, 0.66],
+        radius_fraction: 0.32,
         drain_blockage_pct: blockagePct,
       });
 
@@ -188,8 +188,8 @@ export default function DashboardPage() {
     await api.runScenario({
       scenario: activeScenario,
       intensity_dbz: sc.dbz,
-      storm_center: [0.45, 0.55],
-      radius_fraction: 0.25,
+      storm_center: [0.48, 0.66],
+      radius_fraction: 0.32,
       drain_blockage_pct: blockagePct,
     });
     addAlert(`Drain blockage what-if: ${blockagePct}% — simulation reset`);

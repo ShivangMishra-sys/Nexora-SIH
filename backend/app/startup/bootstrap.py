@@ -194,10 +194,12 @@ def run_bootstrap() -> dict:
     surface.initialize(dem_arr, slope_x_arr, slope_y_arr, c_raster)
 
     # SWMM runner
-    from app.simulation.drainage_1d import SWMMRunner, spatial_join_to_grid, load_blockage_model
+    from app.simulation.drainage_1d import SWMMRunner, spatial_join_to_grid, load_blockage_model, compute_blockage_derating
     from app.data.road_network import prepare_graph_for_swmm
     simple_G = prepare_graph_for_swmm(G)
-    swmm_runner = SWMMRunner(swmm_inp)
+    clf = load_blockage_model()
+    blockage_derating = compute_blockage_derating(simple_G, clf)
+    swmm_runner = SWMMRunner(swmm_inp, G=simple_G, blockage_derating=blockage_derating)
     swmm_runner.start()
 
     # Spatial join [24]

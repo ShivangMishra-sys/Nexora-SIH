@@ -39,7 +39,7 @@ export const api = {
 
   runScenario: (params: ScenarioParams | string) => {
     const body = typeof params === 'string' 
-      ? { scenario: params, intensity_dbz: 50, storm_center: [0.5, 0.5], radius_fraction: 0.25, drain_blockage_pct: 0 }
+      ? { scenario: params, intensity_dbz: 50, storm_center: [0.48, 0.66], radius_fraction: 0.32, drain_blockage_pct: 0 }
       : params;
     return fetchJSON<{ status: string }>('/api/scenario/run', {
       method: 'POST',

@@ -50,15 +50,15 @@ def _make_grid_shape(bbox, res_m: float = GRID_RESOLUTION_M):
 # ---------------------------------------------------------------------------
 def synthetic_reflectivity_frame(
     grid_shape: Tuple[int, int],
-    storm_center: Tuple[float, float],  # (col_frac, row_frac) in [0,1]
-    intensity_dbz: float = 45.0,         # 45 dBZ ≈ heavy rain ~30 mm/hr
-    radius_px: float = 30.0,
+    storm_center: Tuple[float, float] = (0.48, 0.66),  # (col_frac, row_frac) centered on Anna Nagar
+    intensity_dbz: float = 50.0,                        # 50 dBZ ≈ heavy rain ~50 mm/hr
+    radius_px: float = 75.0,
     t: float = 0.0,
-    velocity: Tuple[float, float] = (0.3, 0.1),  # px/step
+    velocity: Tuple[float, float] = (-0.02, 0.01),      # Slow northeast-to-southwest drift across Anna Nagar
 ) -> np.ndarray:
     """
     Moving Gaussian storm cell shaped exactly like a real radar sweep (2D dBZ).
-    [11] Produces input for real wradlib Z→R math — only the source is synthetic.
+    [11] Produces input for real wradlib Z→R math — centered directly on Anna Nagar.
     """
     rows, cols = grid_shape
     yy, xx = np.mgrid[0:rows, 0:cols].astype(np.float32)
@@ -277,9 +277,9 @@ class RainfallSystem:
         self.tracker = PrecipitationTracker()
         self._t = 0
         self._storm_params = {
-            "center": (0.5, 0.5),
+            "center": (0.48, 0.66),
             "intensity_dbz": 50.0,
-            "radius_px": max(5, self.grid_shape[0] // 4),
+            "radius_px": max(10, int(self.grid_shape[0] * 0.32)),
         }
         logger.info(f"[11] RainfallSystem ready — grid {self.grid_shape}, bbox {bbox}")
         # Seed initial frames so nowcast is available immediately on startup
@@ -291,11 +291,11 @@ class RainfallSystem:
             )
             self.nowcast_engine.push_frame(seed_z)
 
-    def set_storm(self, intensity_dbz: float, center=(0.5, 0.5), radius_fraction=0.25):
+    def set_storm(self, intensity_dbz: float, center=(0.48, 0.66), radius_fraction=0.32):
         self._storm_params = {
             "center": center,
             "intensity_dbz": intensity_dbz,
-            "radius_px": max(5, int(self.grid_shape[0] * radius_fraction)),
+            "radius_px": max(10, int(self.grid_shape[0] * radius_fraction)),
         }
         # Push updated frame for new storm parameters
         Z_dbz = synthetic_reflectivity_frame(
