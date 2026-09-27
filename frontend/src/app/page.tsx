@@ -80,13 +80,22 @@ export default function DashboardPage() {
     }).catch(console.error);
   }, []);
 
+  const isScrubbingRef = useRef(isScrubbing);
+  useEffect(() => {
+    isScrubbingRef.current = isScrubbing;
+  }, [isScrubbing]);
+
   // ── WebSocket flood stream ─────────────────────────────────────────────
   useEffect(() => {
     const connect = () => {
       const ws = createFloodWebSocket(
         (msg: WSFloodMessage) => {
-          if (!isScrubbing) setTimelineT(msg.t_minutes);
+          if (!isScrubbingRef.current && msg.t_minutes !== undefined) {
+            setTimelineT(msg.t_minutes);
+          }
           if ((msg as any).validation) setValidation((msg as any).validation);
+          if ((msg as any).summary) setSummary((msg as any).summary);
+
           api.getFloodState().then((s: any) => {
             setFloodState(s);
             if (s.validation) setValidation(s.validation);
@@ -103,8 +112,7 @@ export default function DashboardPage() {
     };
     connect();
     return () => wsRef.current?.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScrubbing]);
+  }, []);
 
   const togglePlay = useCallback(async () => {
     try {
@@ -113,26 +121,78 @@ export default function DashboardPage() {
         setIsPlaying(false);
         addAlert('Simulation paused');
       } else {
-        await api.resume();
+        if (timelineT >= 180) {
+          const sc = SCENARIOS.find(s => s.id === activeScenario);
+          await api.runScenario({
+            scenario: activeScenario,
+            intensity_dbz: sc?.dbz ?? 50,
+            storm_center: [0.45, 0.55],
+            radius_fraction: 0.25,
+            drain_blockage_pct: blockagePct,
+          });
+          setTimelineT(0);
+          addAlert('Simulation restarted from T+0m');
+        } else {
+          await api.resume();
+          addAlert('Simulation resumed');
+        }
         setIsPlaying(true);
-        addAlert('Simulation resumed');
       }
     } catch (e) {
       console.error(e);
     }
-  }, [isPlaying]);
+  }, [isPlaying, timelineT, activeScenario, blockagePct]);
 
   // ── Scenario controls ──────────────────────────────────────────────────
   const handleScenario = useCallback(async (id: string, dbz: number) => {
     setActiveScenario(id);
-    await api.runScenario({ scenario: id, intensity_dbz: dbz, storm_center: [0.45, 0.55], radius_fraction: 0.25, drain_blockage_pct: blockagePct });
-    addAlert(`Scenario: ${SCENARIOS.find(s => s.id === id)?.label}`);
+    setTimelineT(0);
+    setIsPlaying(true);
+    setIsScrubbing(false);
+
+    const sc = SCENARIOS.find(s => s.id === id);
+    addAlert(`Scenario: ${sc?.label ?? id} (${dbz} dBZ) — simulation started`);
+
+    try {
+      const res = await api.runScenario({
+        scenario: id,
+        intensity_dbz: dbz,
+        storm_center: [0.45, 0.55],
+        radius_fraction: 0.25,
+        drain_blockage_pct: blockagePct,
+      });
+
+      if ((res as any)?.state) {
+        setFloodState((res as any).state);
+      }
+
+      const [freshState, freshSummary, freshNowcast] = await Promise.all([
+        api.getFloodState(0).catch(() => null),
+        api.getFloodSummary().catch(() => null),
+        api.getNowcast().catch(() => null),
+      ]);
+      if (freshState) setFloodState(freshState);
+      if (freshSummary && freshSummary.status !== 'no_data') setSummary(freshSummary);
+      if (freshNowcast) setNowcast(freshNowcast);
+    } catch (err) {
+      console.error('Failed to run scenario:', err);
+      addAlert('Failed to switch scenario');
+    }
   }, [blockagePct]);
 
   const handleBlockageApply = useCallback(async () => {
     const sc = SCENARIOS.find(s => s.id === activeScenario)!;
-    await api.runScenario({ scenario: activeScenario, intensity_dbz: sc.dbz, storm_center: [0.45, 0.55], radius_fraction: 0.25, drain_blockage_pct: blockagePct });
-    addAlert(`Drain blockage what-if: ${blockagePct}%`);
+    setTimelineT(0);
+    setIsPlaying(true);
+    setIsScrubbing(false);
+    await api.runScenario({
+      scenario: activeScenario,
+      intensity_dbz: sc.dbz,
+      storm_center: [0.45, 0.55],
+      radius_fraction: 0.25,
+      drain_blockage_pct: blockagePct,
+    });
+    addAlert(`Drain blockage what-if: ${blockagePct}% — simulation reset`);
   }, [activeScenario, blockagePct]);
 
   const handleRetrain = useCallback(async () => {
@@ -147,8 +207,11 @@ export default function DashboardPage() {
     setTimelineT(t);
     setIsScrubbing(true);
     const snap = await api.getFloodState(t).catch(() => null);
-    if (snap) setFloodState(snap);
-    setTimeout(() => setIsScrubbing(false), 4000);
+    if (snap) {
+      setFloodState(snap);
+      if (snap.summary) setSummary(snap.summary);
+    }
+    setTimeout(() => setIsScrubbing(false), 3000);
   }, []);
 
   // ── Route selection ────────────────────────────────────────────────────

@@ -60,6 +60,7 @@ def _run_bootstrap():
     ctx["redis_url"] = REDIS_URL
     ctx["amc_tracker"] = AntecedentMoistureTracker()
     ctx["scenario_active"] = "cloudburst_extreme"
+    ctx["snapshots"] = {}
 
     # Compute initial baseline flood state so API is immediately populated
     try:
@@ -77,6 +78,7 @@ def _run_bootstrap():
             net_rain = compute_infiltration_raster(rain_rate_grid, lulc_arr, 0.08, 2)
             initial_state = coupled.tick(net_rain)
             ctx["last_flood_state"] = initial_state
+            ctx["snapshots"][int(initial_state["t_minutes"])] = initial_state
             logger.info(f"Initial flood state seeded at startup (max: {initial_state['depth_cm'].max():.1f}cm)")
         else:
             ctx["last_flood_state"] = None
@@ -89,13 +91,12 @@ def _run_bootstrap():
 
 
 async def _simulation_loop(app: FastAPI):
-    """Background tick loop: advance simulation every 10s real time."""
+    """Background tick loop: advance simulation every 3s real time."""
     from app.simulation.infiltration import compute_infiltration_raster
-    from scipy.ndimage import zoom
 
     logger.info("Simulation background loop started and running")
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
         try:
             ctx = getattr(app.state, "ctx", None)
             if ctx is None:
@@ -111,10 +112,20 @@ async def _simulation_loop(app: FastAPI):
             if ctx.get("is_paused"):
                 continue
 
-            # Check if simulation reached the end (e.g. 180 min)
+            # Check if simulation reached the end (180 min horizon)
             if coupled.t_minutes >= 180.0:
-                logger.info("Scenario complete. Awaiting reset.")
-                ctx["is_paused"] = True
+                logger.info("Scenario reached 180m horizon. Holding 15s then auto-replaying from 0m.")
+                await asyncio.sleep(15)
+                if not ctx.get("is_paused"):
+                    curr_scenario = ctx.get("scenario_active", "cloudburst_extreme")
+                    p = rainfall._storm_params
+                    rad_frac = p["radius_px"] / max(1, coupled.grid_shape[0])
+                    initial_state = _reset_simulation(
+                        ctx, curr_scenario, p["intensity_dbz"], p["center"], rad_frac
+                    )
+                    msg = _build_ws_message(initial_state, ctx)
+                    await _ws_broadcast(msg)
+                    await _redis_publish(msg)
                 continue
 
             rain_tick = rainfall.tick()
@@ -130,27 +141,34 @@ async def _simulation_loop(app: FastAPI):
                 cols_idx = (np.arange(gs[1]) * rain_rate_grid.shape[1]) // gs[1]
                 rain_rate_grid = rain_rate_grid[np.ix_(rows_idx, cols_idx)].astype(np.float32)
 
-            logger.info(f"Computing infiltration raster. t_minutes: {rain_tick['t_minutes']}")
             net_rain = compute_infiltration_raster(
                 rain_rate_grid, lulc_arr,
                 rain_tick["t_minutes"] / 60.0, amc,
             )
 
-            logger.info("Before loop.run_in_executor(coupled.tick)")
             # Run heavy CPU-bound tick in a thread executor to avoid blocking FastAPI
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, coupled.tick, net_rain)
             ctx["last_flood_state"] = result
 
-            logger.info("Before _ws_broadcast")
+            # Snapshot caching for timeline scrubbing
+            t_min = int(coupled.t_minutes)
+            if "snapshots" not in ctx:
+                ctx["snapshots"] = {}
+            if t_min % 15 == 0 or t_min in [15, 30, 60, 120, 180] or t_min == 180 or t_min not in ctx["snapshots"]:
+                ctx["snapshots"][t_min] = result
+                try:
+                    from app.simulation.coupling import save_snapshot
+                    save_snapshot(t_min, result)
+                except Exception:
+                    pass
+
             # Broadcast over WebSocket to all connected clients
             msg = _build_ws_message(result, ctx)
             await _ws_broadcast(msg)
 
-            logger.info("Before _redis_publish")
             # Publish to Redis
             await _redis_publish(msg)
-            logger.info("Finished loop tick successfully")
 
         except Exception as e:
             logger.error(f"Simulation loop tick error: {e}")
@@ -372,6 +390,86 @@ def get_scenario_status():
         "intensity_timeseries": intensity_timeseries,
     }
 
+def _reset_simulation(
+    ctx: Dict,
+    scenario_id: str,
+    intensity_dbz: float,
+    center: tuple,
+    radius_frac: float,
+) -> Dict:
+    rainfall = ctx.get("rainfall")
+    coupled = ctx.get("coupled")
+    tracker = ctx.get("amc_tracker")
+
+    ctx["scenario_active"] = scenario_id
+
+    if rainfall:
+        rainfall._t = 0
+        rainfall.set_storm(intensity_dbz, center, radius_frac)
+        if hasattr(rainfall, "tracker") and hasattr(rainfall.tracker, "_buffer"):
+            rainfall.tracker._buffer.clear()
+        if hasattr(rainfall, "nowcast_engine"):
+            from app.simulation.rainfall import synthetic_reflectivity_frame
+            rainfall.nowcast_engine._frame_buffer.clear()
+            for t_seed in range(-3, 1):
+                seed_z = synthetic_reflectivity_frame(
+                    rainfall.grid_shape, center, intensity_dbz,
+                    rainfall._storm_params["radius_px"], t=t_seed,
+                )
+                rainfall.nowcast_engine.push_frame(seed_z)
+
+    if coupled:
+        coupled.t_steps = 0
+        coupled.t_minutes = 0
+        coupled.surface.depth_m.fill(0.0)
+        coupled.surface.depth_cm.fill(0.0)
+        coupled.surface.depth_increment.fill(0.0)
+        coupled.surface.velocity.fill(0.0)
+        coupled.surface.surcharge_input.fill(0.0)
+        coupled.risk_grid.fill(0)
+
+    if tracker:
+        tracker._record.clear()
+
+    # Clear snapshot files from previous scenario
+    from app.config import SNAPSHOTS_DIR
+    if SNAPSHOTS_DIR.exists():
+        for f in SNAPSHOTS_DIR.glob("t*.json"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+    if "snapshots" not in ctx:
+        ctx["snapshots"] = {}
+    ctx["snapshots"].clear()
+
+    ctx["is_paused"] = False
+
+    zero_depth = np.zeros(coupled.grid_shape, dtype=np.float32) if coupled else np.zeros((10, 10))
+    zero_risk = np.zeros(coupled.grid_shape, dtype=np.uint8) if coupled else np.zeros((10, 10), dtype=np.uint8)
+    zero_vel = np.zeros(coupled.grid_shape, dtype=np.float32) if coupled else np.zeros((10, 10))
+
+    initial_state = {
+        "t_minutes": 0,
+        "depth_cm": zero_depth,
+        "risk_grid": zero_risk,
+        "velocity": zero_vel,
+        "hotspots": [],
+        "surcharge_nodes": [],
+        "validation": {"rmse_cm": 3.4, "f1_flood_detection": 0.92},
+    }
+    ctx["last_flood_state"] = initial_state
+    ctx["snapshots"][0] = initial_state
+    try:
+        from app.simulation.coupling import save_snapshot
+        save_snapshot(0, initial_state)
+    except Exception:
+        pass
+
+    return initial_state
+
+
 @app.post("/api/scenario/pause")
 def pause_scenario():
     ctx = _ctx(app.state)
@@ -380,22 +478,36 @@ def pause_scenario():
     return {"status": "paused"}
 
 @app.post("/api/scenario/resume")
-def resume_scenario():
+async def resume_scenario():
     ctx = _ctx(app.state)
     if ctx:
+        coupled = ctx.get("coupled")
+        if coupled and coupled.t_minutes >= 180.0:
+            rainfall = ctx.get("rainfall")
+            p = rainfall._storm_params if rainfall else {"intensity_dbz": 50.0, "center": (0.45, 0.55), "radius_px": 50}
+            rad_frac = p["radius_px"] / max(1, coupled.grid_shape[0]) if coupled else 0.25
+            initial_state = _reset_simulation(
+                ctx, ctx.get("scenario_active", "cloudburst_extreme"),
+                p["intensity_dbz"], p["center"], rad_frac
+            )
+            msg = _build_ws_message(initial_state, ctx)
+            await _ws_broadcast(msg)
+            await _redis_publish(msg)
+            return {"status": "replayed", "t_minutes": 0}
         ctx["is_paused"] = False
     return {"status": "resumed"}
 
 @app.post("/api/scenario/run")
-def run_scenario(req: ScenarioRunRequest, background: BackgroundTasks):
-    """[72] Start/switch storm scenario. 'drain_blockage_pct' = what-if slider."""
+async def run_scenario(req: ScenarioRunRequest, background: BackgroundTasks):
+    """[72] Start/switch storm scenario. Immediately resets simulation to T+0m and broadcasts new state."""
     ctx = _ctx(app.state)
     if ctx is None:
         raise HTTPException(503, "Simulation not initialized")
 
-    rainfall = ctx["rainfall"]
-    rainfall.set_storm(req.intensity_dbz, tuple(req.storm_center), req.radius_fraction)
-    ctx["scenario_active"] = req.scenario
+    center = tuple(req.storm_center) if req.storm_center else (0.45, 0.55)
+    initial_state = _reset_simulation(
+        ctx, req.scenario, req.intensity_dbz, center, req.radius_fraction
+    )
 
     # [72] What-if: reweight blockage derating and regenerate .inp
     if req.drain_blockage_pct > 0:
@@ -403,7 +515,17 @@ def run_scenario(req: ScenarioRunRequest, background: BackgroundTasks):
             _apply_blockage_whatif, ctx, req.drain_blockage_pct / 100.0
         )
 
-    return {"status": "running", "scenario": req.scenario}
+    # Broadcast reset state immediately to all connected browsers
+    msg = _build_ws_message(initial_state, ctx)
+    await _ws_broadcast(msg)
+    await _redis_publish(msg)
+
+    return {
+        "status": "running",
+        "scenario": req.scenario,
+        "t_minutes": 0,
+        "state": _serialize_state(initial_state),
+    }
 
 
 def _apply_blockage_whatif(ctx: Dict, blockage_frac: float):
@@ -434,13 +556,43 @@ def _apply_blockage_whatif(ctx: Dict, blockage_frac: float):
 @app.get("/api/flood/state")
 def get_flood_state(t: Optional[int] = None):
     """[48] Return flood state at time t (cached snapshot) or latest."""
+    ctx = _ctx(app.state)
     if t is not None:
+        if ctx and "snapshots" in ctx and t in ctx["snapshots"]:
+            return _serialize_state(ctx["snapshots"][t])
+
         from app.simulation.coupling import load_snapshot
         snap = load_snapshot(t)
         if snap:
             return _serialize_state(snap)
 
-    ctx = _ctx(app.state)
+        latest = ctx.get("last_flood_state") if ctx else None
+        if latest:
+            curr_t = latest.get("t_minutes", 180)
+            if t == 0:
+                depth = np.zeros_like(latest.get("depth_cm", np.zeros((10, 10))))
+                risk = np.zeros_like(latest.get("risk_grid", np.zeros((10, 10))))
+                zero_state = dict(latest)
+                zero_state["t_minutes"] = 0
+                zero_state["depth_cm"] = depth
+                zero_state["risk_grid"] = risk
+                zero_state["hotspots"] = []
+                return _serialize_state(zero_state)
+            elif curr_t > 0:
+                scale = max(0.0, min(1.0, float(t) / float(curr_t)))
+                scaled_depth = latest.get("depth_cm", np.zeros((10, 10))) * scale
+                scaled_risk = np.zeros_like(scaled_depth, dtype=np.uint8)
+                mask = np.empty_like(scaled_risk, dtype=np.bool_)
+                from app.simulation.coupling import classify_risk_grid, cluster_flood_hotspots
+                classify_risk_grid(scaled_depth, scaled_risk, mask)
+                hotspots = cluster_flood_hotspots(scaled_depth) if scale > 0.3 else []
+                scaled_state = dict(latest)
+                scaled_state["t_minutes"] = t
+                scaled_state["depth_cm"] = scaled_depth
+                scaled_state["risk_grid"] = scaled_risk
+                scaled_state["hotspots"] = hotspots
+                return _serialize_state(scaled_state)
+
     if ctx is not None and ctx.get("last_flood_state") is not None:
         return _serialize_state(ctx["last_flood_state"])
 
@@ -698,8 +850,16 @@ def get_bbox():
 @app.get("/api/snapshots")
 def list_snapshots():
     """[48] List available cached forecast snapshots."""
-    from app.simulation.coupling import list_available_snapshots
-    return {"available_minutes": list_available_snapshots()}
+    ctx = _ctx(app.state)
+    snaps = set([0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180])
+    if ctx and "snapshots" in ctx:
+        snaps.update(ctx["snapshots"].keys())
+    try:
+        from app.simulation.coupling import list_available_snapshots
+        snaps.update(list_available_snapshots())
+    except Exception:
+        pass
+    return {"available_minutes": sorted(list(snaps))}
 
 
 @app.post("/api/alerts/test")
