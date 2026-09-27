@@ -15,10 +15,17 @@ import Link from 'next/link';
 const FloodMap = dynamic(() => import('@/components/map/FloodMap'), { ssr: false });
 
 const VEHICLE_OPTIONS = [
-  { id: 'car',         label: 'Car',   icon: '🚗', desc: 'Passable up to 20cm' },
-  { id: 'suv',         label: 'SUV',   icon: '🚙', desc: 'Passable up to 35cm' },
-  { id: 'fire_tender', label: 'Fire',  icon: '🚒', desc: 'Emergency clearance' },
-  { id: 'bus',         label: 'Bus',   icon: '🚌', desc: 'Restricted routes' },
+  { id: 'car',         label: 'Car',   icon: '🚗', desc: 'Clearance: 15cm max' },
+  { id: 'suv',         label: 'SUV',   icon: '🚙', desc: 'Clearance: 25cm max' },
+  { id: 'fire_tender', label: 'Fire',  icon: '🚒', desc: 'Emergency: 30cm max' },
+  { id: 'bus',         label: 'Bus',   icon: '🚌', desc: 'Transit: 20cm max' },
+];
+
+const ROUTE_PRESETS: Array<{ label: string; start: [number, number]; end: [number, number] }> = [
+  { label: '⚠️ Avoid Flood (South → North)', start: [13.095, 80.211], end: [13.108, 80.211] },
+  { label: 'Tower → Roundtana', start: [13.088, 80.214], end: [13.085, 80.218] },
+  { label: 'Thirumangalam → Shenoy', start: [13.085, 80.198], end: [13.078, 80.226] },
+  { label: 'K4 Police → 100ft Rd', start: [13.090, 80.207], end: [13.080, 80.210] },
 ];
 
 export default function RoutePlannerPage() {
@@ -26,7 +33,7 @@ export default function RoutePlannerPage() {
   const [vehicleClass, setVehicleClass] = useState('car');
   const {
     routeState, hoveredNodeId,
-    startRouteSelection, handleMapClick, clearRoute, setHoveredNodeId,
+    startRouteSelection, handleMapClick, clearRoute, setHoveredNodeId, setPresetRoute,
   } = useMapInteraction({ vehicleClass });
   const [networkGeoJSON, setNetworkGeoJSON] = useState<GeoJSONFeatureCollection | null>(null);
 
@@ -132,22 +139,53 @@ export default function RoutePlannerPage() {
 
             {/* Plan button / status */}
             {routeState.step === 'idle' ? (
-              <button
-                id="start-route-btn"
-                onClick={startRouteSelection}
-                style={{
-                  padding: '12px 18px', borderRadius: 12, border: 'none', cursor: 'pointer',
-                  background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                  color: '#fff', fontSize: 13, fontWeight: 600,
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  boxShadow: '0 0 30px rgba(59,130,246,0.35), 0 4px 16px rgba(0,0,0,0.3)',
-                  transition: 'all 0.2s ease',
-                }}
-                className="animate-slide-up"
-              >
-                <Navigation size={15} />
-                Plan Flood-Safe Route
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  id="start-route-btn"
+                  onClick={startRouteSelection}
+                  style={{
+                    padding: '12px 18px', borderRadius: 12, border: 'none', cursor: 'pointer',
+                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                    color: '#fff', fontSize: 13, fontWeight: 600,
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    boxShadow: '0 0 30px rgba(59,130,246,0.35), 0 4px 16px rgba(0,0,0,0.3)',
+                    transition: 'all 0.2s ease',
+                  }}
+                  className="animate-slide-up"
+                >
+                  <Navigation size={15} />
+                  Plan Flood-Safe Route
+                </button>
+
+                {/* Quick Presets */}
+                <div style={{
+                  background: 'rgba(8,13,26,0.92)', border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 12, backdropFilter: 'blur(16px)', padding: 10,
+                }} className="animate-slide-up">
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 6 }}>
+                    Quick Corridors
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {ROUTE_PRESETS.map((p, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setPresetRoute(p.start, p.end)}
+                        style={{
+                          padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)',
+                          background: 'rgba(255,255,255,0.03)', color: '#93c5fd', fontSize: 11,
+                          cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(59,130,246,0.15)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; }}
+                      >
+                        <span>{p.label}</span>
+                        <Navigation size={10} style={{ opacity: 0.6 }} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             ) : hint && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,

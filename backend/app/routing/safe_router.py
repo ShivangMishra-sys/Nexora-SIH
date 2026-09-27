@@ -45,22 +45,34 @@ def build_flood_weighted_graph(
         d_v = depth_cm_at_node.get(str(v), 0.0)
         depth_cm = max(d_u, d_v)
 
-        # [59] Impassable beyond vehicle-class threshold
+        # [59][60] Flood impedance multipliers based on live water depth:
+        # 1. Impassable: depth exceeds vehicle clearance threshold
         if depth_cm >= impassable_threshold:
-            weight = base_len * ROUTE_IMPEDANCE["impassable"]   # [59]
-        elif depth_cm >= RISK_THRESHOLDS["critical"]:
-            weight = base_len * ROUTE_IMPEDANCE["critical"]
-        elif depth_cm >= RISK_THRESHOLDS["caution"]:
-            weight = base_len * ROUTE_IMPEDANCE["caution"]
+            weight = base_len * ROUTE_IMPEDANCE["impassable"]   # 1000.0x
+        # 2. Critical: severe flood depth (>= 15 cm)
+        elif depth_cm >= RISK_THRESHOLDS["caution"]:           # 15.0 cm
+            weight = base_len * ROUTE_IMPEDANCE["critical"]     # 10.0x
+        # 3. Caution: pooling water (>= 5 cm)
+        elif depth_cm >= RISK_THRESHOLDS["safe"]:              # 5.0 cm
+            weight = base_len * ROUTE_IMPEDANCE["caution"]      # 2.0x
+        # 4. Safe: dry / negligible road film (< 5 cm)
         else:
-            weight = base_len * ROUTE_IMPEDANCE["safe"]
+            weight = base_len * ROUTE_IMPEDANCE["safe"]         # 1.0x
 
         # Underpass/tunnel boost [10]
         if data.get("high_risk_depression"):
             weight *= float(data.get("flood_impedance_boost", 3.0))
 
-        weighted.add_edge(u, v, weight=weight, flood_depth_cm=depth_cm,
-                          base_length=base_len, **data)
+        # For parallel edges between u and v from MultiDiGraph, preserve lowest weight
+        if weighted.has_edge(u, v):
+            if weight < weighted[u][v]["weight"]:
+                weighted[u][v].update(data)
+                weighted[u][v]["weight"] = weight
+                weighted[u][v]["flood_depth_cm"] = depth_cm
+                weighted[u][v]["base_length"] = base_len
+        else:
+            weighted.add_edge(u, v, weight=weight, flood_depth_cm=depth_cm,
+                              base_length=base_len, **data)
 
     return weighted
 
@@ -96,16 +108,14 @@ def compute_safe_route(
     weighted = build_flood_weighted_graph(G, depth_cm_at_node, vehicle_class)
 
     try:
-        # [57] Flood-safe route (flood-weighted)
+        # [57] Flood-safe route (flood-impedance weighted)
         safe_path = nx.dijkstra_path(weighted, start_node, end_node, weight="weight")
-        safe_length = nx.dijkstra_path_length(weighted, start_node, end_node, weight="base_length")
-        safe_weight  = nx.dijkstra_path_length(weighted, start_node, end_node, weight="weight")
+        safe_length = sum(weighted[u][v]["base_length"] for u, v in zip(safe_path[:-1], safe_path[1:]))
+        safe_weight  = sum(weighted[u][v]["weight"] for u, v in zip(safe_path[:-1], safe_path[1:]))
 
-        # Naive shortest (unweighted by flood)
-        naive_path = nx.dijkstra_path(G, start_node, end_node,
-                                       weight=lambda u,v,d: d.get("length", 50.0))
-        naive_length = nx.dijkstra_path_length(G, start_node, end_node,
-                                                weight=lambda u,v,d: d.get("length", 50.0))
+        # Naive shortest (unweighted by flood, real physical road distance)
+        naive_path = nx.dijkstra_path(weighted, start_node, end_node, weight="base_length")
+        naive_length = sum(weighted[u][v]["base_length"] for u, v in zip(naive_path[:-1], naive_path[1:]))
     except nx.NetworkXNoPath:
         logger.warning(f"[57] No path found between {start_node} and {end_node}")
         return None
@@ -123,6 +133,9 @@ def compute_safe_route(
     safe_depths = [depth_cm_at_node.get(str(n), 0.0) for n in safe_path]
     naive_depths = [depth_cm_at_node.get(str(n), 0.0) for n in naive_path]
 
+    safe_max_d = float(max(safe_depths, default=0.0))
+    naive_max_d = float(max(naive_depths, default=0.0))
+
     return {
         "start": {"node": start_node},
         "end":   {"node": end_node},
@@ -130,19 +143,19 @@ def compute_safe_route(
         "safe_route": {
             "node_ids":     [str(n) for n in safe_path],
             "coordinates":  path_to_coords(safe_path, G),
-            "distance_m":   safe_length,
-            "max_depth_cm": float(max(safe_depths, default=0.0)),
+            "distance_m":   round(safe_length, 1),
+            "max_depth_cm": round(safe_max_d, 1),
         },
         "naive_route": {
             "node_ids":     [str(n) for n in naive_path],
             "coordinates":  path_to_coords(naive_path, G),
-            "distance_m":   naive_length,
-            "max_depth_cm": float(max(naive_depths, default=0.0)),
+            "distance_m":   round(naive_length, 1),
+            "max_depth_cm": round(naive_max_d, 1),
         },
         "comparison": {
-            "distance_saved_m":      naive_length - safe_length,
-            "max_depth_avoided_cm":  max(naive_depths, default=0.0) - max(safe_depths, default=0.0),
-            "safe_weight_ratio":     safe_weight / max(1.0, naive_length),
+            "distance_saved_m":      round(naive_length - safe_length, 1),
+            "max_depth_avoided_cm":  round(naive_max_d - safe_max_d, 1),
+            "safe_weight_ratio":     round(safe_weight / max(1.0, naive_length), 2),
         },
     }
 
@@ -178,9 +191,9 @@ def update_edge_weights(G: nx.DiGraph, depth_cm_at_node: Dict, vehicle_class: st
         base = float(data.get("base_length", data.get("length", 50.0)))
         if depth_cm >= impassable_threshold:
             data["weight"] = base * ROUTE_IMPEDANCE["impassable"]
-        elif depth_cm >= RISK_THRESHOLDS["critical"]:
+        elif depth_cm >= RISK_THRESHOLDS["caution"]:  # >= 15.0 cm
             data["weight"] = base * ROUTE_IMPEDANCE["critical"]
-        elif depth_cm >= RISK_THRESHOLDS["caution"]:
+        elif depth_cm >= RISK_THRESHOLDS["safe"]:     # >= 5.0 cm
             data["weight"] = base * ROUTE_IMPEDANCE["caution"]
         else:
             data["weight"] = base * ROUTE_IMPEDANCE["safe"]
