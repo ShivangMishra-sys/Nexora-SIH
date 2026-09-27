@@ -106,14 +106,14 @@ export default function FloodMap({
         id: 'flood-circles',
         type: 'circle',
         source: 'flood-zones',
-        filter: ['>', ['get', 'depth_cm'], 2.0],
+        filter: ['>', ['coalesce', ['get', 'depth_cm'], 0], 2.0],
         paint: {
           'circle-radius': [
-            'interpolate', ['linear'], ['get', 'depth_cm'],
-            2, 4,
-            15, 7,
-            30, 12,
-            60, 18,
+            'interpolate', ['linear'], ['coalesce', ['get', 'depth_cm'], 0],
+            2, 4.5,
+            15, 8.0,
+            30, 13.0,
+            60, 18.0,
           ],
           'circle-color': [
             'match', ['get', 'risk'],
@@ -122,10 +122,15 @@ export default function FloodMap({
             'impassable', '#ef4444',
             '#f59e0b',
           ],
-          'circle-opacity': 0.85,
+          'circle-opacity': 0.9,
           'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-opacity': 0.7,
+          'circle-stroke-color': [
+            'match', ['get', 'risk'],
+            'caution',    'rgba(253,230,138,0.7)',
+            'critical',   'rgba(254,215,170,0.7)',
+            'impassable', 'rgba(254,202,202,0.7)',
+            'rgba(253,230,138,0.7)',
+          ],
         },
       });
 
@@ -191,18 +196,17 @@ export default function FloodMap({
         },
       });
 
-      // Network nodes
+      // Network nodes: Only render dry drainage junctions; flooded junctions are rendered exclusively by flood-circles
       map.addLayer({
         id: 'network-nodes',
         type: 'circle',
         source: 'network',
-        filter: ['==', ['geometry-type'], 'Point'],
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['<=', ['coalesce', ['get', 'depth_cm'], 0], 2.0]],
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['get', 'depth_cm'], 0, 3, 30, 9],
-          'circle-color': RISK_COLOR_EXPR,
-          'circle-opacity': 0.8,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 0.5,
+          'circle-radius': 2.5,
+          'circle-color': '#64748b',
+          'circle-opacity': 0.45,
+          'circle-stroke-width': 0,
         },
       });
 
