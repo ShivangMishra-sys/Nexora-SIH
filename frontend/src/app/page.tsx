@@ -172,7 +172,7 @@ export default function DashboardPage() {
         api.getNowcast().catch(() => null),
       ]);
       if (freshState) setFloodState(freshState);
-      if (freshSummary && freshSummary.status !== 'no_data') setSummary(freshSummary);
+      if (freshSummary && (freshSummary as any).status !== 'no_data') setSummary(freshSummary);
       if (freshNowcast) setNowcast(freshNowcast);
     } catch (err) {
       console.error('Failed to run scenario:', err);
@@ -209,7 +209,7 @@ export default function DashboardPage() {
     const snap = await api.getFloodState(t).catch(() => null);
     if (snap) {
       setFloodState(snap);
-      if (snap.summary) setSummary(snap.summary);
+      if (snap.summary) setSummary(snap.summary as any);
     }
     setTimeout(() => setIsScrubbing(false), 3000);
   }, []);
@@ -222,7 +222,8 @@ export default function DashboardPage() {
       const { start } = routeState;
       setRouteState({ step: 'computing', start, end: { lat, lon } });
       try {
-        const result = await api.computeRoute([start.lat, start.lon], [lat, lon], vehicleClass);
+        const activeTime = timelineT > 0 ? timelineT : undefined;
+        const result = await api.computeRoute([start.lat, start.lon], [lat, lon], vehicleClass, activeTime);
         setRouteResult(result);
         setRouteState({ step: 'done', start, end: { lat, lon }, result });
         addAlert(`Route: ${(result.safe_route.distance_m / 1000).toFixed(1)} km safe path found`);
@@ -231,7 +232,23 @@ export default function DashboardPage() {
         addAlert('Route computation failed — no path found');
       }
     }
-  }, [routeState, vehicleClass]);
+  }, [routeState, vehicleClass, timelineT]);
+
+  // Automatically recalculate route if vehicle class or timeline changes while route is active
+  useEffect(() => {
+    if (routeState.step === 'done' && routeState.start && routeState.end) {
+      const { start, end } = routeState;
+      const activeTime = timelineT > 0 ? timelineT : undefined;
+      api.computeRoute([start.lat, start.lon], [end.lat, end.lon], vehicleClass, activeTime)
+        .then(result => {
+          setRouteResult(result);
+          setRouteState({ step: 'done', start, end, result });
+        })
+        .catch(err => {
+          console.error('Failed to recompute route for vehicle class/time:', err);
+        });
+    }
+  }, [vehicleClass, timelineT]);
 
   const clearRoute = useCallback(() => {
     setRouteState({ step: 'idle' });
@@ -367,11 +384,11 @@ export default function DashboardPage() {
                 boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
               }}>
                 {[
-                  { label: 'Max Depth', value: `${summary.max_depth_cm.toFixed(1)}`, unit: 'cm', color: '#f97316' },
+                  { label: 'Max Depth', value: `${(summary.max_depth_cm ?? 0).toFixed(1)}`, unit: 'cm', color: '#f97316' },
                   { label: 'Mean Depth', value: `${((summary as any).mean_depth_cm ?? 0).toFixed(1)}`, unit: 'cm', color: '#38bdf8' },
                   { label: 'Severe Nodes', value: `${(summary as any).severe_count ?? 0}`, unit: '', color: '#ef4444' },
-                  { label: 'Impassable', value: `${summary.impassable_pct.toFixed(1)}`, unit: '%', color: '#ef4444' },
-                  { label: 'Critical', value: `${summary.critical_pct.toFixed(1)}`, unit: '%', color: '#f97316' },
+                  { label: 'Impassable', value: `${(summary.impassable_pct ?? 0).toFixed(1)}`, unit: '%', color: '#ef4444' },
+                  { label: 'Critical', value: `${(summary.critical_pct ?? 0).toFixed(1)}`, unit: '%', color: '#f97316' },
                   { label: 'Hotspots', value: String(summary.hotspots?.length ?? 0), unit: '', color: '#f59e0b' },
                 ].map(({ label, value, unit, color }, i) => (
                   <React.Fragment key={label}>

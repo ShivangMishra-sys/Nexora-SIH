@@ -32,9 +32,10 @@ export const api = {
     start: [number, number],
     end:   [number, number],
     vehicle_class = 'car',
+    time_min?: number,
   ) => fetchJSON<RouteResult>('/api/v1/route', {
     method: 'POST',
-    body: JSON.stringify({ start, end, vehicle_class }),
+    body: JSON.stringify({ start, end, vehicle_class, time_min }),
   }),
 
   runScenario: (params: ScenarioParams | string) => {
@@ -107,15 +108,21 @@ export interface FloodStateAPI {
 }
 
 export interface FloodSummary {
+  status?: string;
   max_depth_cm: number;
   mean_depth_cm: number;
   severe_count?: number;
-  safe_pct: number;
-  caution_pct: number;
-  critical_pct: number;
-  impassable_pct: number;
-  hotspots: Hotspot[];
-  validation: ValidationResult;
+  critical_count?: number;
+  disruptive_count?: number;
+  nuisance_count?: number;
+  dry_count?: number;
+  drainage_util_pct?: number;
+  safe_pct?: number;
+  caution_pct?: number;
+  critical_pct?: number;
+  impassable_pct?: number;
+  hotspots?: Hotspot[];
+  validation?: ValidationResult;
 }
 
 export interface Hotspot {

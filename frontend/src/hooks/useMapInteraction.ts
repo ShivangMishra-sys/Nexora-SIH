@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
 import type { MapPin, RouteSelectionState } from '@/types/flood';
 
 interface UseMapInteractionOptions {
   vehicleClass?: string;
+  timeMin?: number;
 }
 
 interface UseMapInteractionResult {
@@ -24,25 +25,32 @@ interface UseMapInteractionResult {
  * Route selection flow:
  *   idle → selecting_start → [click] → selecting_end → [click] → computing → done
  */
-export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOptions = {}): UseMapInteractionResult {
+export function useMapInteraction({ vehicleClass = 'car', timeMin }: UseMapInteractionOptions = {}): UseMapInteractionResult {
   const [routeState, setRouteState] = useState<RouteSelectionState>({ step: 'idle' });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
-  // Automatically recalculate route if vehicle class changes while route is active
+  const routeStateRef = useRef(routeState);
   useEffect(() => {
-    if (routeState.step === 'done' && routeState.start && routeState.end) {
-      const { start, end } = routeState;
+    routeStateRef.current = routeState;
+  }, [routeState]);
+
+  // Automatically recalculate route if vehicle class or timeline changes while route is active
+  useEffect(() => {
+    const current = routeStateRef.current;
+    if (current.step === 'done' && current.start && current.end) {
+      const { start, end } = current;
       api.computeRoute(
         [start.lat, start.lon],
         [end.lat, end.lon],
         vehicleClass,
+        timeMin,
       ).then(result => {
         setRouteState({ step: 'done', start, end, result });
       }).catch(err => {
-        console.error('Failed to recompute route for vehicle class:', err);
+        console.error('Failed to recompute route for vehicle class/time:', err);
       });
     }
-  }, [vehicleClass]);
+  }, [vehicleClass, timeMin]);
 
   const startRouteSelection = useCallback(() => {
     setRouteState({ step: 'selecting_start' });
@@ -61,6 +69,7 @@ export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOpt
             [start.lat, start.lon],
             [lat, lon],
             vehicleClass,
+            timeMin,
           );
           setRouteState({ step: 'done', start, end: { lat, lon }, result });
         } catch (e) {
@@ -69,7 +78,7 @@ export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOpt
         }
       }
     },
-    [routeState, vehicleClass],
+    [routeState, vehicleClass, timeMin],
   );
 
   const setPresetRoute = useCallback(
@@ -80,7 +89,7 @@ export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOpt
         end: { lat: end[0], lon: end[1] },
       });
       try {
-        const result = await api.computeRoute(start, end, vehicleClass);
+        const result = await api.computeRoute(start, end, vehicleClass, timeMin);
         setRouteState({
           step: 'done',
           start: { lat: start[0], lon: start[1] },
@@ -92,7 +101,7 @@ export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOpt
         setRouteState({ step: 'idle' });
       }
     },
-    [vehicleClass],
+    [vehicleClass, timeMin],
   );
 
   const clearRoute = useCallback(() => {

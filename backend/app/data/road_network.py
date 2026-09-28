@@ -73,14 +73,21 @@ def add_elevations_from_dem(G: nx.MultiDiGraph, dem_path: Path = DEM_BREACHED) -
                 data.setdefault("elevation", 5.0)
             return G
 
-        # Use rasterio directly to avoid osmnx's gdal dependency on Windows
+        # Use rasterio with reprojection if DEM is projected (e.g. EPSG:32643 UTM)
         with rasterio.open(str(dem_path)) as src:
+            from pyproj import Transformer
+            is_wgs84 = src.crs and src.crs.to_epsg() == 4326
+            transformer = None if is_wgs84 else Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
             for node, data in G.nodes(data=True):
                 x, y = data.get('x'), data.get('y')
                 if x is not None and y is not None:
                     try:
-                        val = list(src.sample([(x, y)]))[0][0]
-                        data["elevation"] = float(val)
+                        samp_x, samp_y = transformer.transform(x, y) if transformer else (x, y)
+                        val = list(src.sample([(samp_x, samp_y)]))[0][0]
+                        if val < -100 or np.isnan(val) or val > 10000:
+                            data["elevation"] = 5.0
+                        else:
+                            data["elevation"] = round(float(val), 2)
                     except Exception:
                         data.setdefault("elevation", 5.0)
                 else:

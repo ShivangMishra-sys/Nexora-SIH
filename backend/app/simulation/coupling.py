@@ -38,6 +38,7 @@ def save_snapshot(t_minutes: int, state: Dict) -> None:
     """[48] Cache a simulation snapshot so the timeline scrubber never recomputes."""
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     path = SNAPSHOTS_DIR / f"t{t_minutes:04d}.json"
+    tmp_path = SNAPSHOTS_DIR / f"t{t_minutes:04d}.tmp"
     # Convert numpy arrays to lists for JSON serialisation
     serialisable = {}
     for k, v in state.items():
@@ -45,8 +46,9 @@ def save_snapshot(t_minutes: int, state: Dict) -> None:
             serialisable[k] = v.tolist()
         else:
             serialisable[k] = v
-    with open(path, "w") as f:
+    with open(tmp_path, "w") as f:
         json.dump(serialisable, f)
+    tmp_path.replace(path)
 
 
 def load_snapshot(t_minutes: int) -> Optional[Dict]:
@@ -54,8 +56,12 @@ def load_snapshot(t_minutes: int) -> Optional[Dict]:
     path = SNAPSHOTS_DIR / f"t{t_minutes:04d}.json"
     if not path.exists():
         return None
-    with open(path) as f:
-        data = json.load(f)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load snapshot t{t_minutes:04d}: {e}")
+        return None
     # Restore numpy arrays
     for k in ["depth_cm", "risk_grid", "velocity"]:
         if k in data and isinstance(data[k], list):
