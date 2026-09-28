@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
 import type { MapPin, RouteSelectionState } from '@/types/flood';
 
@@ -28,10 +28,16 @@ export function useMapInteraction({ vehicleClass = 'car' }: UseMapInteractionOpt
   const [routeState, setRouteState] = useState<RouteSelectionState>({ step: 'idle' });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
+  const routeStateRef = useRef(routeState);
+  useEffect(() => {
+    routeStateRef.current = routeState;
+  }, [routeState]);
+
   // Automatically recalculate route if vehicle class changes while route is active
   useEffect(() => {
-    if (routeState.step === 'done' && routeState.start && routeState.end) {
-      const { start, end } = routeState;
+    const current = routeStateRef.current;
+    if (current.step === 'done' && current.start && current.end) {
+      const { start, end } = current;
       api.computeRoute(
         [start.lat, start.lon],
         [end.lat, end.lon],

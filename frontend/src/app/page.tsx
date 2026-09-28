@@ -172,7 +172,7 @@ export default function DashboardPage() {
         api.getNowcast().catch(() => null),
       ]);
       if (freshState) setFloodState(freshState);
-      if (freshSummary && freshSummary.status !== 'no_data') setSummary(freshSummary);
+      if (freshSummary && (freshSummary as any).status !== 'no_data') setSummary(freshSummary);
       if (freshNowcast) setNowcast(freshNowcast);
     } catch (err) {
       console.error('Failed to run scenario:', err);
@@ -209,7 +209,7 @@ export default function DashboardPage() {
     const snap = await api.getFloodState(t).catch(() => null);
     if (snap) {
       setFloodState(snap);
-      if (snap.summary) setSummary(snap.summary);
+      if (snap.summary) setSummary(snap.summary as any);
     }
     setTimeout(() => setIsScrubbing(false), 3000);
   }, []);
@@ -367,11 +367,11 @@ export default function DashboardPage() {
                 boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
               }}>
                 {[
-                  { label: 'Max Depth', value: `${summary.max_depth_cm.toFixed(1)}`, unit: 'cm', color: '#f97316' },
+                  { label: 'Max Depth', value: `${(summary.max_depth_cm ?? 0).toFixed(1)}`, unit: 'cm', color: '#f97316' },
                   { label: 'Mean Depth', value: `${((summary as any).mean_depth_cm ?? 0).toFixed(1)}`, unit: 'cm', color: '#38bdf8' },
                   { label: 'Severe Nodes', value: `${(summary as any).severe_count ?? 0}`, unit: '', color: '#ef4444' },
-                  { label: 'Impassable', value: `${summary.impassable_pct.toFixed(1)}`, unit: '%', color: '#ef4444' },
-                  { label: 'Critical', value: `${summary.critical_pct.toFixed(1)}`, unit: '%', color: '#f97316' },
+                  { label: 'Impassable', value: `${(summary.impassable_pct ?? 0).toFixed(1)}`, unit: '%', color: '#ef4444' },
+                  { label: 'Critical', value: `${(summary.critical_pct ?? 0).toFixed(1)}`, unit: '%', color: '#f97316' },
                   { label: 'Hotspots', value: String(summary.hotspots?.length ?? 0), unit: '', color: '#f59e0b' },
                 ].map(({ label, value, unit, color }, i) => (
                   <React.Fragment key={label}>

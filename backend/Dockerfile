@@ -15,18 +15,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
 ENV C_INCLUDE_PATH=/usr/include/gdal
 
-# WhiteboxTools binary — pre-placed at docker/WhiteboxTools_linux_amd64.zip [44]
-# If the zip is not in the repo, the RUN block falls back to a no-op.
-COPY docker/WhiteboxTools_linux_amd64.zip /tmp/wbt.zip
-RUN if [ -f /tmp/wbt.zip ]; then \
-      unzip /tmp/wbt.zip -d /opt/whitebox && \
+# WhiteboxTools binary [44]
+# Uses pre-placed docker/WhiteboxTools_linux_amd64.zip if present, or downloads it during build.
+COPY docker/ /tmp/docker-assets/
+RUN mkdir -p /opt/whitebox && \
+    if [ -f /tmp/docker-assets/WhiteboxTools_linux_amd64.zip ]; then \
+      unzip -q /tmp/docker-assets/WhiteboxTools_linux_amd64.zip -d /opt/whitebox && \
       if [ -d /opt/whitebox/WhiteboxTools_linux_amd64/WBT ]; then mv /opt/whitebox/WhiteboxTools_linux_amd64/WBT /opt/whitebox/WBT; fi && \
       chmod +x /opt/whitebox/WBT/whitebox_tools && \
-      echo "WhiteboxTools installed"; \
+      echo "WhiteboxTools installed from local archive"; \
+    elif curl -fsSL https://www.whiteboxgeo.com/WBT_Linux/WhiteboxTools_linux_amd64.zip -o /tmp/wbt.zip && [ -s /tmp/wbt.zip ]; then \
+      unzip -q /tmp/wbt.zip -d /opt/whitebox && \
+      if [ -d /opt/whitebox/WhiteboxTools_linux_amd64/WBT ]; then mv /opt/whitebox/WhiteboxTools_linux_amd64/WBT /opt/whitebox/WBT; fi && \
+      chmod +x /opt/whitebox/WBT/whitebox_tools && \
+      rm -f /tmp/wbt.zip && \
+      echo "WhiteboxTools downloaded and installed"; \
     else \
       mkdir -p /opt/whitebox/WBT && \
-      echo "WhiteboxTools zip not found — WBT operations will use NumPy fallback"; \
-    fi
+      echo "WhiteboxTools zip not found and download skipped — WBT operations will use NumPy fallback"; \
+    fi && \
+    rm -rf /tmp/docker-assets
 
 ENV WBT_PATH=/opt/whitebox/WBT
 

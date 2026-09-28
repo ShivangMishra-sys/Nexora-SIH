@@ -17,13 +17,21 @@ export interface FloodNode {
 }
 
 export interface FloodSummary {
+  status?: string;
   mean_depth_cm: number;
   max_depth_cm: number;
-  severe_count: number;
-  disruptive_count: number;
-  nuisance_count: number;
-  dry_count: number;
-  drainage_util_pct: number;
+  severe_count?: number;
+  critical_count?: number;
+  disruptive_count?: number;
+  nuisance_count?: number;
+  dry_count?: number;
+  drainage_util_pct?: number;
+  safe_pct?: number;
+  caution_pct?: number;
+  critical_pct?: number;
+  impassable_pct?: number;
+  hotspots?: any[];
+  validation?: any;
 }
 
 export interface FloodState {
