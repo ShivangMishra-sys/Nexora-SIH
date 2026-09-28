@@ -32,9 +32,10 @@ export const api = {
     start: [number, number],
     end:   [number, number],
     vehicle_class = 'car',
+    time_min?: number,
   ) => fetchJSON<RouteResult>('/api/v1/route', {
     method: 'POST',
-    body: JSON.stringify({ start, end, vehicle_class }),
+    body: JSON.stringify({ start, end, vehicle_class, time_min }),
   }),
 
   runScenario: (params: ScenarioParams | string) => {

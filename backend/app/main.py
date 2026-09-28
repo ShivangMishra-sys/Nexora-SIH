@@ -121,7 +121,7 @@ async def _simulation_loop(app: FastAPI):
                     p = rainfall._storm_params
                     rad_frac = p["radius_px"] / max(1, coupled.grid_shape[0])
                     initial_state = _reset_simulation(
-                        ctx, curr_scenario, p["intensity_dbz"], p["center"], rad_frac
+                        ctx, curr_scenario, p["intensity_dbz"], p["center"], rad_frac, clear_snapshots=False
                     )
                     msg = _build_ws_message(initial_state, ctx)
                     await _ws_broadcast(msg)
@@ -206,6 +206,7 @@ class RouteRequest(BaseModel):
     start: List[float]   # [lat, lon]
     end:   List[float]   # [lat, lon]
     vehicle_class: str = "car"
+    time_min: Optional[int] = None
 
 class AlertTestRequest(BaseModel):
     message: str = "Test flood alert from UrbanFlow"
@@ -221,19 +222,59 @@ class GeocodingRequest(BaseModel):
 def _ctx(app_state) -> Optional[Dict]:
     return getattr(app_state, "ctx", None)
 
-def _depth_at_nodes(ctx: Dict) -> Dict[str, float]:
-    """Extract per-node depth from current grid state."""
-    state = ctx.get("last_flood_state")
-    if state is None:
-        return {}
-    depth_cm = state.get("depth_cm", np.zeros((10, 10)))
+def _get_active_flood_depth_grid(ctx: Dict, time_min: Optional[int] = None) -> Optional[np.ndarray]:
+    """Get 2D depth_cm grid for the specified or most relevant active flood state."""
+    if ctx is None:
+        return None
+
+    # 1. If explicit time_min requested, try snapshot
+    if time_min is not None:
+        if "snapshots" in ctx and time_min in ctx["snapshots"]:
+            snap = ctx["snapshots"][time_min]
+            if isinstance(snap, dict) and "depth_cm" in snap:
+                return np.asarray(snap["depth_cm"], dtype=np.float32)
+        from app.simulation.coupling import load_snapshot
+        snap = load_snapshot(time_min)
+        if snap and "depth_cm" in snap:
+            return np.asarray(snap["depth_cm"], dtype=np.float32)
+
+    # 2. Check last_flood_state
+    last_state = ctx.get("last_flood_state")
+    if last_state and "depth_cm" in last_state:
+        grid = np.asarray(last_state["depth_cm"], dtype=np.float32)
+        if float(grid.max()) > 3.0:
+            return grid
+
+    # 3. If last_state is dry (e.g. t=0 or fresh reset), fallback to peak snapshot (t=60, 30, etc.)
+    from app.simulation.coupling import load_snapshot
+    for t_cand in [60, 30, 90, 120, 15, 180]:
+        snap = load_snapshot(t_cand)
+        if snap and "depth_cm" in snap:
+            grid = np.asarray(snap["depth_cm"], dtype=np.float32)
+            if float(grid.max()) > 3.0:
+                return grid
+
+    if last_state and "depth_cm" in last_state:
+        return np.asarray(last_state["depth_cm"], dtype=np.float32)
+    return None
+
+
+def _depth_at_nodes(ctx: Dict, time_min: Optional[int] = None) -> Tuple[Dict[str, float], Optional[np.ndarray]]:
+    """Extract per-node depth from current grid state with 3x3 window to avoid inlet drain hole."""
+    depth_cm = _get_active_flood_depth_grid(ctx, time_min)
+    if depth_cm is None:
+        return {}, None
     node_grid = ctx.get("node_grid_map", {})
     result = {}
+    rows, cols = depth_cm.shape
     for node_id, (r, c) in node_grid.items():
-        r = min(r, depth_cm.shape[0] - 1)
-        c = min(c, depth_cm.shape[1] - 1)
-        result[str(node_id)] = float(depth_cm[r, c])
-    return result
+        r = min(max(0, r), rows - 1)
+        c = min(max(0, c), cols - 1)
+        r_min, r_max = max(0, r - 1), min(rows, r + 2)
+        c_min, c_max = max(0, c - 1), min(cols, c + 2)
+        win = depth_cm[r_min:r_max, c_min:c_max]
+        result[str(node_id)] = float(np.max(win)) if win.size > 0 else float(depth_cm[r, c])
+    return result, depth_cm
 
 def _build_ws_message(result: Dict, ctx: Dict) -> str:
     depth_cm = result.get("depth_cm", np.zeros((10, 10)))
@@ -399,6 +440,7 @@ def _reset_simulation(
     intensity_dbz: float,
     center: tuple,
     radius_frac: float,
+    clear_snapshots: bool = False,
 ) -> Dict:
     rainfall = ctx.get("rainfall")
     coupled = ctx.get("coupled")
@@ -438,18 +480,19 @@ def _reset_simulation(
     if tracker:
         tracker._record.clear()
 
-    # Clear snapshot files from previous scenario
-    from app.config import SNAPSHOTS_DIR
-    if SNAPSHOTS_DIR.exists():
-        for f in SNAPSHOTS_DIR.glob("t*.json"):
-            try:
-                f.unlink()
-            except Exception:
-                pass
+    # Clear snapshot files only when switching to a different scenario or forced
+    if clear_snapshots:
+        from app.config import SNAPSHOTS_DIR
+        if SNAPSHOTS_DIR.exists():
+            for f in SNAPSHOTS_DIR.glob("t*.json"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
-    if "snapshots" not in ctx:
-        ctx["snapshots"] = {}
-    ctx["snapshots"].clear()
+        if "snapshots" not in ctx:
+            ctx["snapshots"] = {}
+        ctx["snapshots"].clear()
 
     ctx["is_paused"] = False
 
@@ -512,8 +555,9 @@ async def run_scenario(req: ScenarioRunRequest, background: BackgroundTasks):
         raise HTTPException(503, "Simulation not initialized")
 
     center = tuple(req.storm_center) if req.storm_center else (0.48, 0.66)
+    clear_snaps = (req.scenario != ctx.get("scenario_active"))
     initial_state = _reset_simulation(
-        ctx, req.scenario, req.intensity_dbz, center, req.radius_fraction
+        ctx, req.scenario, req.intensity_dbz, center, req.radius_fraction, clear_snapshots=clear_snaps
     )
 
     # [72] What-if: reweight blockage derating and regenerate .inp
@@ -644,8 +688,18 @@ def _serialize_state(state: Dict) -> Dict:
             # Sample actual physical drainage & road junctions from the OSM road graph
             for node_id, (r, c) in node_grid.items():
                 if 0 <= r < rows and 0 <= c < cols:
-                    d = float(depth_cm[r, c])
-                    risk_idx = int(risk_grid[r, c]) if isinstance(risk_grid, np.ndarray) else 0
+                    r_min, r_max = max(0, r - 1), min(rows, r + 2)
+                    c_min, c_max = max(0, c - 1), min(cols, c + 2)
+                    win = depth_cm[r_min:r_max, c_min:c_max]
+                    d = float(np.max(win)) if win.size > 0 else float(depth_cm[r, c])
+                    if d >= 30.0:
+                        risk_idx = 3
+                    elif d >= 15.0:
+                        risk_idx = 2
+                    elif d >= 5.0:
+                        risk_idx = 1
+                    else:
+                        risk_idx = 0
                     # Prioritize wet / flooded intersections (d >= 2 cm), plus a representative baseline sample of dry ones
                     if d >= 2.0 or (hash(str(node_id)) % 8 == 0):
                         node_data = G.nodes.get(node_id, {})
@@ -785,14 +839,17 @@ def compute_route(req: RouteRequest):
     if G is None:
         raise HTTPException(503, "Road network not loaded")
 
-    depth_map = _depth_at_nodes(ctx)
+    depth_map, depth_cm_2d = _depth_at_nodes(ctx, req.time_min)
     start_lat, start_lon = req.start[0], req.start[1]
     end_lat, end_lon     = req.end[0],   req.end[1]
 
     start_node = nearest_node(G, start_lat, start_lon)
     end_node   = nearest_node(G, end_lat,   end_lon)
 
-    result = compute_safe_route(G, depth_map, start_node, end_node, req.vehicle_class)
+    result = compute_safe_route(
+        G, depth_map, start_node, end_node, req.vehicle_class,
+        depth_cm_2d=depth_cm_2d, grid_bbox=BBOX_WGS84,
+    )
     if result is None:
         raise HTTPException(404, "No route found between selected points")
     return result
@@ -846,7 +903,7 @@ def get_network_graph():
     if G is None:
         return {"type": "FeatureCollection", "features": []}
 
-    depth_map = _depth_at_nodes(ctx)
+    depth_map, _ = _depth_at_nodes(ctx)
     features = []
 
     # 1. Edge features: Prioritize ALL flooded road segments, plus representative road corridors

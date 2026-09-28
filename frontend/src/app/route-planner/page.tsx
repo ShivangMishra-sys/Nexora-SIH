@@ -34,7 +34,10 @@ export default function RoutePlannerPage() {
   const {
     routeState, hoveredNodeId,
     startRouteSelection, handleMapClick, clearRoute, setHoveredNodeId, setPresetRoute,
-  } = useMapInteraction({ vehicleClass });
+  } = useMapInteraction({
+    vehicleClass,
+    timeMin: liveState?.t_minutes && liveState.t_minutes > 0 ? liveState.t_minutes : 60,
+  });
   const [networkGeoJSON, setNetworkGeoJSON] = useState<GeoJSONFeatureCollection | null>(null);
   const [floodState, setFloodState] = useState<any>(null);
 

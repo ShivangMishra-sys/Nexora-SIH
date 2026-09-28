@@ -222,7 +222,8 @@ export default function DashboardPage() {
       const { start } = routeState;
       setRouteState({ step: 'computing', start, end: { lat, lon } });
       try {
-        const result = await api.computeRoute([start.lat, start.lon], [lat, lon], vehicleClass);
+        const activeTime = timelineT > 0 ? timelineT : undefined;
+        const result = await api.computeRoute([start.lat, start.lon], [lat, lon], vehicleClass, activeTime);
         setRouteResult(result);
         setRouteState({ step: 'done', start, end: { lat, lon }, result });
         addAlert(`Route: ${(result.safe_route.distance_m / 1000).toFixed(1)} km safe path found`);
@@ -231,7 +232,23 @@ export default function DashboardPage() {
         addAlert('Route computation failed — no path found');
       }
     }
-  }, [routeState, vehicleClass]);
+  }, [routeState, vehicleClass, timelineT]);
+
+  // Automatically recalculate route if vehicle class or timeline changes while route is active
+  useEffect(() => {
+    if (routeState.step === 'done' && routeState.start && routeState.end) {
+      const { start, end } = routeState;
+      const activeTime = timelineT > 0 ? timelineT : undefined;
+      api.computeRoute([start.lat, start.lon], [end.lat, end.lon], vehicleClass, activeTime)
+        .then(result => {
+          setRouteResult(result);
+          setRouteState({ step: 'done', start, end, result });
+        })
+        .catch(err => {
+          console.error('Failed to recompute route for vehicle class/time:', err);
+        });
+    }
+  }, [vehicleClass, timelineT]);
 
   const clearRoute = useCallback(() => {
     setRouteState({ step: 'idle' });
